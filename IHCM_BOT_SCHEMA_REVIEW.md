@@ -18,7 +18,7 @@ An AI-powered operational assistant for Independence Healthcare Management (IHCM
 - CMS 2567 PDF parsing with citation-level POC guidance
 - SWOT analysis upload (PDF, Word, text) with auto building detection
 - **Supabase Auth** (email/password, JWT-verified on all endpoints)
-- **RLS enforcement** on user-facing reads (anon key + JWT)
+- **Partial RLS enforcement** on dashboard, conversations, building-history, knowledge reads (anon key + JWT). Chat context reads still use service-role.
 - Server-side conversation persistence with role-scoped history
 - Conversation deletion
 - Server-side feedback collection
@@ -285,16 +285,17 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 
 ## 7. Authentication & Authorization
 
-### Current State (Supabase Auth + RLS)
+### Current State (Supabase Auth — Partial RLS)
 | Layer | Implementation | Security Level |
 |-------|---------------|----------------|
 | Login | Supabase Auth email/password | **Server-issued JWT** |
 | Session | Supabase SDK handles refresh/persistence | Automatic |
 | Password reset | supabase.auth.resetPasswordForEmail() | Email-based |
 | Role assignment | user_profiles.app_role + allowed_bot_roles | **Server-side** |
-| Building access | user_profiles.global_access_level | **Server-side** |
+| Building access | user_profiles.global_access_level | **Server-side (schema only — not enforced, see gaps below)** |
 | API auth | Every endpoint calls requireAuth(req) → verifies JWT | **Enforced** |
-| API reads | RLS-enforced via anon key + user JWT (supabaseUser) | **Enforced** |
+| API reads (dashboard, conversations, history, knowledge) | RLS-enforced via anon key + user JWT (supabaseUser) | **Enforced** |
+| API reads (chat context, building context, knowledge for chat) | service_role key (bypasses RLS) | **Not RLS-enforced** |
 | API writes | service_role key for admin-level writes | **Server-side** |
 | Conversation ownership | Verified: user_id from JWT matches conversation.user_id | **Enforced** |
 | Rate limiting | Upstash Redis: 15 chat/min, 10 feedback/min per IP | **Production-safe** |
@@ -309,13 +310,16 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 | Lauren Greenwood | lgreenwood@indhcm.com | regional_director | mds, regional, don |
 | Steven Isaac | SIsaac@indhcm.com | regional_director | regional, admin |
 
-### RLS Enforcement
-- **Reads**: All user-facing API endpoints (dashboard, conversations, building-history, knowledge) use `supabaseUser` client created with anon key + user JWT. Database RLS policies (role+domain+facility checks from platform hardening migration) are enforced.
+### RLS Reality Check
+- **RLS-enforced reads**: Dashboard, conversations, building-history, and knowledge list endpoints use `supabaseUser` (anon key + user JWT). Database RLS policies (role+domain+facility checks from platform hardening migration) are enforced on these paths.
+- **NOT RLS-enforced**: The chat endpoint (`v2_definitive/api/chat.js`) creates its own module-level service-role Supabase client for building context, knowledge lookup, and conversation persistence. This is the primary read path and is **outside the RLS story**. Chat reads should not be described as RLS-backed.
 - **Writes**: service_role key used for conversation persistence, census/survey ingest, knowledge management (admin operations).
 - **Admin**: admin.js uses service_role for cross-user queries (restricted to super_admin via JS check).
 
-### Remaining Auth Gap
-- user_facility_access not yet populated (all users have global access via global_access_level)
+### Remaining Auth Gaps
+1. **Chat context reads bypass RLS** — `v2_definitive/api/chat.js` uses a module-level service-role client for all DB queries (building context, knowledge, conversation persistence). Migrating this to the RLS-enforced client requires refactoring the chat module's Supabase initialization.
+2. **user_facility_access not populated** — all users have global access via global_access_level. Per-building authorization is schematized but not active. Do not test building-level access restrictions — they will not work.
+3. **Building access label is aspirational** — the auth table says "Server-side" for building access, but in practice all 6 users can see all 7 buildings.
 
 ---
 
@@ -370,30 +374,38 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 
 ## 10. Known Issues & Technical Debt
 
+### High Priority
+1. **Chat context reads bypass RLS** — the chat endpoint uses a module-level service-role client for building context and knowledge. This is the most-used read path and is not RLS-enforced. All other user-facing reads (dashboard, conversations, history, knowledge list) are RLS-enforced.
+
 ### Medium Priority
-1. **user_facility_access not populated** — all users have global access. Building-level restrictions not active.
-2. **No automated census ingest** — manual CSV upload or cron needed. No live feed from SNF Metrics.
-3. **Alert data is seed/demo only** — ai_alerts table has sample alerts, not auto-generated from real operational data. Needs real staffing/census data feeds first.
+2. **2567 PDF parsing is partial on some real PDFs** — the parser works well on cleanly formatted CMS 2567s but can miss citations or produce incomplete extractions on scanned/OCR PDFs, multi-facility documents, or non-standard formatting. QA should test with real facility PDFs and verify citation counts match the original document.
+3. **SWOT Word upload detection has edge cases** — auto building detection works for clearly structured multi-building SWOT documents but can fall back to portfolio-level (no building match) on single-building Word docs or when building names appear in unexpected locations. PDF and plain text uploads are more reliable.
+4. **user_facility_access not populated** — all users have global access. Building-level restrictions not active. Do not test per-building access restrictions.
+5. **No automated census ingest** — manual CSV upload only. No live feed from SNF Metrics.
+6. **Alert data is seed/demo only** — ai_alerts table has sample alerts, not auto-generated from real operational data. Needs real staffing/census data feeds first.
 
 ### Low Priority
-4. **Static data in bots.js/buildings.js/workflows.js** — could move to Supabase for dynamic management.
-5. **No notification system** — no email alerts for knowledge approvals, survey results, feedback.
-6. **No user management UI** — admin can view users but can't add/edit/deactivate from the app.
+7. **Static data in bots.js/buildings.js/workflows.js** — could move to Supabase for dynamic management.
+8. **No notification system** — no email alerts for knowledge approvals, survey results, feedback.
+9. **No user management UI** — admin can view users but can't add/edit/deactivate from the app.
+10. **Knowledge versioning** — `current_version` defaults to 1 on creation (draft), so the first approval results in version 2. This is intentional (draft = v1, first approved = v2) but may confuse reviewers expecting first approval to be v1.
 
 ---
 
 ## 11. Testing Checklist
 
-### Authentication
+### A. User-Facing Features
+
+#### Authentication
 - [ ] Login with valid IHCM email/password → enters app
 - [ ] Login with wrong password → shows error
 - [ ] Password reset → sends email, user can reset
 - [ ] Session persists on page refresh (Supabase auto-recovery)
 - [ ] Sign out clears session
 - [ ] Each user sees only their allowed role tabs (7 roles: DON, MDS, Billing, Admin, Regional, Marketing, Therapy)
-- [ ] API returns 401 without valid JWT
+- [ ] User-facing API endpoints return 401 without valid JWT
 
-### Portfolio Dashboard
+#### Portfolio Dashboard
 - [ ] Dashboard loads on login as default view
 - [ ] Shows all 7 buildings with census, occupancy, **skilled mix**, risk score
 - [ ] Portfolio summary shows total census, occupancy %, **portfolio skilled mix avg**, buildings at risk, open alerts
@@ -403,7 +415,7 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 - [ ] Portfolio totals correct (census, beds, occupancy %, alerts)
 - [ ] Clicking a building card opens **building detail panel** (not chat)
 
-### Building Detail Panel
+#### Building Detail Panel
 - [ ] Shows building name, state, risk badge, census, occupancy, skilled mix, risk score
 - [ ] Occupancy bar renders correctly
 - [ ] Risk & Strategy section shows risk watchlist + strategic notes
@@ -415,7 +427,7 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 - [ ] "Back to Portfolio" returns to grid
 - [ ] "Chat about [building]" switches to chat with correct building selected
 
-### Chat
+#### Chat
 - [ ] Each of 7 roles loads correct starters and workflows
 - [ ] Each of 7 buildings returns building-specific answers
 - [ ] Bot references real payer mix, survey history, strategic notes
@@ -426,7 +438,7 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 - [ ] Workflow input validation (required fields)
 - [ ] Context windowing: long conversations get summary prefix
 
-### Conversations
+#### Conversations
 - [ ] Chat History button loads conversation list from server
 - [ ] Conversations are role-scoped (DON threads don't show in Billing)
 - [ ] Clicking a conversation loads its messages
@@ -436,24 +448,43 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 - [ ] Conversation continues with same ID on subsequent messages
 - [ ] Export conversation downloads .txt file
 
-### Building History
+#### Building History
 - [ ] History panel loads CMS survey data from Supabase
 - [ ] CMS deficiencies show F-tags, scope/severity per survey
 - [ ] Add Event form saves to Supabase
 - [ ] Events persist across sessions and devices
 - [ ] **No localStorage used** — all data from server
 
-### Data Ingestion
+#### Data Ingestion
 - [ ] Upload Census: SNF Metrics CSV updates census + payer in Supabase
-- [ ] Upload 2567: PDF parses citations and auto-sends analysis
-- [ ] Upload SWOT: PDF/Word/text saves to knowledge with building auto-detection
-- [ ] CMS survey import: pulls deficiency data for all 7 buildings
-- [ ] **Pull CMS Surveys Now button** in Admin > Surveys tab works
+- [ ] Upload 2567: PDF parses citations and auto-sends analysis (**note: parsing is partial on some real PDFs — verify citation count matches source**)
+- [ ] Upload SWOT: PDF/Word/text saves to knowledge with building auto-detection (**note: Word upload may fall back to portfolio-level if building name not detected**)
 - [ ] Add Playbook: saves to knowledge_sources as draft
 - [ ] Approve button promotes draft to approved (bot can reference)
 - [ ] Duplicate playbook submission rejected
+- [ ] Knowledge version increments on approval (draft = v1, first approval = v2)
 
-### Admin Dashboard (super_admin only)
+#### Security (User-Facing)
+- [ ] Rate limiting: 16th chat request in 1 minute returns 429
+- [ ] Oversized request body returns 413
+- [ ] Invalid botId returns 400
+- [ ] Links with javascript: protocol rendered as plain text
+- [ ] PHI disclaimer visible below chat input
+- [ ] **RLS enforced**: user can only see their own conversations (via supabaseUser)
+- [ ] **RLS enforced**: dashboard reads go through anon key + JWT
+- [ ] **Not RLS-enforced**: chat context reads use service-role (known gap, see Known Issues #1)
+
+#### Error Handling
+- [ ] Network disconnect → "Connection error" message
+- [ ] API 429 → "Too many requests" message
+- [ ] API 500 → "Server error" message
+- [ ] Conversation persistence failure → non-blocking, chat still works
+- [ ] Upstash down → rate limiter fails open (no blocking)
+
+### B. Admin & Cron Endpoints
+
+#### Admin Dashboard (super_admin only)
+- [ ] Admin view only visible to super_admin role
 - [ ] Overview tab shows stat cards: users, conversations, feedback, knowledge
 - [ ] **Activity trend chart** shows conversations per day (30 days)
 - [ ] **Feedback trend chart** shows stacked useful/not useful/wrong (30 days)
@@ -466,21 +497,10 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 - [ ] Knowledge tab shows sources with status badges
 - [ ] Surveys tab shows building surveys with IJ flags
 - [ ] **Pull CMS Surveys Now** button fetches from CMS API
-- [ ] Admin view only visible to super_admin role
+- [ ] Non-super_admin users get 403 on /api/admin
 
-### Security
-- [ ] Rate limiting: 16th chat request in 1 minute returns 429
-- [ ] Oversized request body returns 413
-- [ ] Invalid botId returns 400
-- [ ] Links with javascript: protocol rendered as plain text
-- [ ] PHI disclaimer visible below chat input
-- [ ] All API endpoints return 401 without Authorization header
-- [ ] **RLS enforced**: user can only see their own conversations
-- [ ] **RLS enforced**: dashboard reads go through anon key + JWT
-
-### Error Handling
-- [ ] Network disconnect → "Connection error" message
-- [ ] API 429 → "Too many requests" message
-- [ ] API 500 → "Server error" message
-- [ ] Conversation persistence failure → non-blocking, chat still works
-- [ ] Upstash down → rate limiter fails open (no blocking)
+#### CMS Survey Cron (`/api/cron-cms-surveys`)
+- [ ] POST with valid JWT (from admin UI "Pull Now" button) → pulls CMS data
+- [ ] GET with `Authorization: Bearer <CRON_SECRET>` → pulls CMS data (Vercel cron path)
+- [ ] Request without any auth → returns 401
+- [ ] **Note**: This endpoint does NOT require a user JWT when called via cron — it uses CRON_SECRET instead. Do not test it the same way as user-facing APIs.
