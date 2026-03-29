@@ -33,6 +33,7 @@ const { default: parseHandler } = await import('./api/parse-2567.js');
 const { default: verifyHandler } = await import('./api/verify-access.js');
 const { default: feedbackHandler } = await import('./api/feedback.js');
 const { default: conversationsHandler } = await import('./api/conversations.js');
+const { default: ingestCensusHandler } = await import('./api/ingest-census.js');
 
 const PORT = 3001;
 
@@ -84,6 +85,15 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/conversations' && req.method === 'GET') {
       req.url = url.pathname + url.search; // preserve query string
       await conversationsHandler(req, resAdapter);
+      return;
+    }
+
+    // Route: /api/ingest-census — CSV census upload
+    if (url.pathname === '/api/ingest-census' && req.method === 'POST') {
+      let body = '';
+      for await (const chunk of req) { body += chunk; }
+      req.body = body;
+      await ingestCensusHandler(req, resAdapter);
       return;
     }
 
