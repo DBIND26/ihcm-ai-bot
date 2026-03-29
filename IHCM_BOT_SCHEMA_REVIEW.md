@@ -300,7 +300,7 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 | Conversation ownership | Verified: user_id from JWT matches conversation.user_id | **Enforced** |
 | Rate limiting | Upstash Redis: 15 chat/min, 10 feedback/min per IP | **Production-safe** |
 
-### Users (6 configured)
+### Production Users (6 configured)
 | Name | Email | Role | Bot Roles |
 |------|-------|------|-----------|
 | Dov Braun | DBraun@indhcm.com | super_admin | all |
