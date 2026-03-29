@@ -50,7 +50,7 @@ export default function AdminDashboard({ authHeaders }) {
       {activeTab === 'conversations' && <ConversationsTab conversations={data.conversations} totals={data.conversation_totals} />}
       {activeTab === 'feedback' && <FeedbackTab feedback={data.feedback} summary={data.feedback_summary} />}
       {activeTab === 'knowledge' && <KnowledgeTab knowledge={data.knowledge} summary={data.knowledge_summary} />}
-      {activeTab === 'surveys' && <SurveysTab surveys={data.recent_surveys} />}
+      {activeTab === 'surveys' && <SurveysTab surveys={data.recent_surveys} authHeaders={authHeaders} />}
     </div>
   );
 }
@@ -128,7 +128,7 @@ function timeAgo(dateStr) {
 // ── Tab Components ──
 
 function OverviewTab({ data }) {
-  const { conversation_totals, feedback_summary, users, usage_by_role, knowledge_summary } = data;
+  const { conversation_totals, feedback_summary, users, usage_by_role, knowledge_summary, activity_trend, feedback_trend, usage_by_building } = data;
   const activeUsers = users?.filter(u => u.last_active)?.length || 0;
   const usefulPct = feedback_summary?.total > 0
     ? Math.round((feedback_summary.useful / feedback_summary.total) * 100)
@@ -143,16 +143,31 @@ function OverviewTab({ data }) {
         <StatCard label="Knowledge" value={knowledge_summary ? Object.values(knowledge_summary).reduce((a, b) => a + b, 0) : 0} sub={`${knowledge_summary?.draft || 0} drafts`} />
       </div>
 
-      {/* Usage by Role */}
-      <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '16px', border: '1px solid #e5e7eb', marginBottom: '16px' }}>
-        <h3 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: '600', color: '#1f2937' }}>Usage by Role</h3>
-        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-          {Object.entries(usage_by_role || {}).sort((a, b) => b[1] - a[1]).map(([role, count]) => (
-            <div key={role} style={{ textAlign: 'center', minWidth: '70px' }}>
-              <div style={{ fontSize: '20px', fontWeight: '700', color: '#1f2937' }}>{count}</div>
-              <div style={{ fontSize: '11px', color: '#6b7280', textTransform: 'uppercase' }}>{role}</div>
-            </div>
-          ))}
+      {/* Activity Trend (30 days) */}
+      {activity_trend && activity_trend.length > 0 && (
+        <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '16px', border: '1px solid #e5e7eb', marginBottom: '16px' }}>
+          <h3 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: '600', color: '#1f2937' }}>Conversations — Last 30 Days</h3>
+          <BarChart data={activity_trend} valueKey="count" color="#2563eb" />
+        </div>
+      )}
+
+      {/* Feedback Trend (30 days) */}
+      {feedback_trend && feedback_trend.length > 0 && (
+        <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '16px', border: '1px solid #e5e7eb', marginBottom: '16px' }}>
+          <h3 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: '600', color: '#1f2937' }}>Feedback — Last 30 Days</h3>
+          <StackedBarChart data={feedback_trend} />
+        </div>
+      )}
+
+      {/* Usage by Role + Building side by side */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+        <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '16px', border: '1px solid #e5e7eb' }}>
+          <h3 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: '600', color: '#1f2937' }}>Usage by Role</h3>
+          <HorizontalBar data={usage_by_role || {}} color="#2563eb" />
+        </div>
+        <div style={{ backgroundColor: 'white', borderRadius: '8px', padding: '16px', border: '1px solid #e5e7eb' }}>
+          <h3 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: '600', color: '#1f2937' }}>Usage by Building</h3>
+          <HorizontalBar data={usage_by_building || {}} color="#059669" />
         </div>
       </div>
 
@@ -254,19 +269,147 @@ function KnowledgeTab({ knowledge, summary }) {
   );
 }
 
-function SurveysTab({ surveys }) {
+function SurveysTab({ surveys, authHeaders }) {
+  const [pulling, setPulling] = useState(false);
+  const [pullResult, setPullResult] = useState(null);
+
+  const handlePullCms = async () => {
+    setPulling(true);
+    setPullResult(null);
+    try {
+      const res = await fetch('/api/cron-cms-surveys', {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Pull failed');
+      const totalSurveys = data.results?.reduce((s, r) => s + r.surveys, 0) || 0;
+      const totalDefs = data.results?.reduce((s, r) => s + r.deficiencies, 0) || 0;
+      setPullResult(`Pulled ${totalDefs} deficiencies across ${totalSurveys} surveys for ${data.results?.length || 0} buildings`);
+    } catch (err) {
+      setPullResult(`Error: ${err.message}`);
+    } finally {
+      setPulling(false);
+    }
+  };
+
   return (
-    <Table
-      columns={[
-        { key: 'facility_name', label: 'Building' },
-        { key: 'survey_date', label: 'Survey Date' },
-        { key: 'survey_type', label: 'Type', render: v => <Badge text={v} color={v === 'complaint' ? 'red' : 'gray'} /> },
-        { key: 'source', label: 'Source', render: v => <Badge text={v} color={v === 'cms' ? 'blue' : v === 'uploaded_2567' ? 'green' : 'gray'} /> },
-        { key: 'total_deficiencies', label: 'Deficiencies' },
-        { key: 'has_immediate_jeopardy', label: 'IJ', render: v => v ? <Badge text="IJ" color="red" /> : '—' },
-        { key: 'created_at', label: 'Ingested', render: v => timeAgo(v) },
-      ]}
-      rows={surveys || []}
-    />
+    <>
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
+        <button
+          onClick={handlePullCms}
+          disabled={pulling}
+          style={{
+            padding: '8px 16px', borderRadius: '6px', border: 'none',
+            backgroundColor: pulling ? '#d1d5db' : '#2563eb', color: 'white',
+            cursor: pulling ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: '600',
+          }}
+        >
+          {pulling ? 'Pulling from CMS...' : 'Pull CMS Surveys Now'}
+        </button>
+        <span style={{ fontSize: '12px', color: '#6b7280' }}>
+          Auto-pulls monthly on the 1st at 6 AM UTC
+        </span>
+        {pullResult && (
+          <span style={{ fontSize: '12px', color: pullResult.startsWith('Error') ? '#dc2626' : '#166534', fontWeight: '500' }}>
+            {pullResult}
+          </span>
+        )}
+      </div>
+      <Table
+        columns={[
+          { key: 'facility_name', label: 'Building' },
+          { key: 'survey_date', label: 'Survey Date' },
+          { key: 'survey_type', label: 'Type', render: v => <Badge text={v} color={v === 'complaint' ? 'red' : 'gray'} /> },
+          { key: 'source', label: 'Source', render: v => <Badge text={v} color={v === 'cms' ? 'blue' : v === 'uploaded_2567' ? 'green' : 'gray'} /> },
+          { key: 'total_deficiencies', label: 'Deficiencies' },
+          { key: 'has_immediate_jeopardy', label: 'IJ', render: v => v ? <Badge text="IJ" color="red" /> : '—' },
+          { key: 'created_at', label: 'Ingested', render: v => timeAgo(v) },
+        ]}
+        rows={surveys || []}
+      />
+    </>
+  );
+}
+
+// ── Chart Components (pure CSS, no dependencies) ──
+
+function BarChart({ data, valueKey, color }) {
+  const max = Math.max(...data.map(d => d[valueKey]), 1);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '80px' }}>
+      {data.map((d, i) => (
+        <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}
+          title={`${d.date}: ${d[valueKey]}`}
+        >
+          <div style={{
+            width: '100%', maxWidth: '12px', borderRadius: '2px 2px 0 0',
+            backgroundColor: d[valueKey] > 0 ? color : '#f3f4f6',
+            height: `${Math.max((d[valueKey] / max) * 100, 2)}%`,
+            minHeight: d[valueKey] > 0 ? '4px' : '2px',
+            transition: 'height 0.2s',
+          }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StackedBarChart({ data }) {
+  const max = Math.max(...data.map(d => d.useful + d.not_useful + d.questionable), 1);
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '80px' }}>
+        {data.map((d, i) => {
+          const total = d.useful + d.not_useful + d.questionable;
+          const h = total > 0 ? (total / max) * 100 : 2;
+          const usefulH = total > 0 ? (d.useful / total) * 100 : 0;
+          const notUsefulH = total > 0 ? (d.not_useful / total) * 100 : 0;
+          const wrongH = total > 0 ? (d.questionable / total) * 100 : 0;
+          return (
+            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'flex-end' }}
+              title={`${d.date}: ${d.useful} useful, ${d.not_useful} not useful, ${d.questionable} wrong`}
+            >
+              <div style={{ width: '100%', maxWidth: '12px', margin: '0 auto', height: `${Math.max(h, 2)}%`, display: 'flex', flexDirection: 'column', borderRadius: '2px 2px 0 0', overflow: 'hidden' }}>
+                {wrongH > 0 && <div style={{ height: `${wrongH}%`, backgroundColor: '#dc2626' }} />}
+                {notUsefulH > 0 && <div style={{ height: `${notUsefulH}%`, backgroundColor: '#d97706' }} />}
+                {usefulH > 0 && <div style={{ height: `${usefulH}%`, backgroundColor: '#166534' }} />}
+                {total === 0 && <div style={{ height: '100%', backgroundColor: '#f3f4f6' }} />}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: '12px', marginTop: '8px', fontSize: '11px' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: '#166534', display: 'inline-block' }} /> Useful</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: '#d97706', display: 'inline-block' }} /> Not Useful</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><span style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: '#dc2626', display: 'inline-block' }} /> Wrong</span>
+      </div>
+    </div>
+  );
+}
+
+function HorizontalBar({ data, color }) {
+  const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
+  const max = entries.length > 0 ? entries[0][1] : 1;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      {entries.map(([label, count]) => (
+        <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ width: '80px', fontSize: '11px', color: '#6b7280', textTransform: 'uppercase', textAlign: 'right', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {label}
+          </div>
+          <div style={{ flex: 1, height: '16px', backgroundColor: '#f3f4f6', borderRadius: '3px', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', borderRadius: '3px', backgroundColor: color,
+              width: `${(count / max) * 100}%`, transition: 'width 0.3s',
+            }} />
+          </div>
+          <div style={{ fontSize: '12px', fontWeight: '600', color: '#1f2937', width: '30px', textAlign: 'right' }}>
+            {count}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }

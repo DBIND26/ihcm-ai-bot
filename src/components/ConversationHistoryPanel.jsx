@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function ConversationHistoryPanel({ conversationList, conversationId, loading, onLoadConversation }) {
+export default function ConversationHistoryPanel({ conversationList, conversationId, loading, onLoadConversation, onDeleteConversation }) {
   return (
     <div style={{
       padding: '16px 24px',
@@ -38,10 +38,27 @@ export default function ConversationHistoryPanel({ conversationList, conversatio
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <strong style={{ color: '#1f2937' }}>{conv.title || 'Untitled'}</strong>
-              <span style={{ color: '#9ca3af', fontSize: '11px' }}>
+              <strong style={{ color: '#1f2937', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{conv.title || 'Untitled'}</strong>
+              <span style={{ color: '#9ca3af', fontSize: '11px', marginRight: '8px' }}>
                 {conv.message_count} msg{conv.message_count !== 1 ? 's' : ''}
               </span>
+              {onDeleteConversation && (
+                <span
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm('Delete this conversation? This cannot be undone.')) {
+                      onDeleteConversation(conv.conversation_id);
+                    }
+                  }}
+                  style={{
+                    color: '#9ca3af', fontSize: '14px', cursor: 'pointer',
+                    padding: '0 4px', lineHeight: 1, flexShrink: 0,
+                  }}
+                  title="Delete conversation"
+                >
+                  ✕
+                </span>
+              )}
             </div>
             <div style={{ color: '#6b7280', fontSize: '12px', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {conv.last_message || '...'}

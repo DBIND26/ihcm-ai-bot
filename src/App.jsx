@@ -10,6 +10,10 @@ import BuildingHistoryPanel from './components/BuildingHistoryPanel.jsx';
 import ConversationHistoryPanel from './components/ConversationHistoryPanel.jsx';
 import Dashboard from './components/Dashboard.jsx';
 import AdminDashboard from './components/AdminDashboard.jsx';
+import RoleTabs from './components/RoleTabs.jsx';
+import ControlsRow from './components/ControlsRow.jsx';
+import WorkflowPanel from './components/WorkflowPanel.jsx';
+import ChatInput from './components/ChatInput.jsx';
 import { supabase } from './lib/supabase.js';
 
 export default function App() {
@@ -650,6 +654,28 @@ export default function App() {
     }
   };
 
+  // Delete a conversation from server
+  const handleDeleteConversation = async (convId) => {
+    try {
+      const res = await fetch(`/api/conversations?id=${convId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (!res.ok) throw new Error('Failed to delete');
+      // If we deleted the active conversation, clear it
+      if (conversationId === convId) {
+        setMessages([]);
+        setConversationId(null);
+        setFeedback({});
+      }
+      // Remove from list
+      setConversationList(prev => prev.filter(c => c.conversation_id !== convId));
+    } catch (err) {
+      console.warn('[IHCM] Failed to delete conversation:', err);
+      setError('Failed to delete conversation.');
+    }
+  };
+
   // Refresh conversation list from server
   const refreshConversationList = async () => {
     if (!userSession?.accessToken) return;
@@ -856,266 +882,31 @@ export default function App() {
 
       {/* Chat View */}
       {viewMode === 'chat' && <>
-      {/* Role Tabs */}
-      <div
-        className="ihcm-tabs"
-        style={{
-          display: 'flex',
-          gap: '8px',
-          padding: '12px 24px',
-          backgroundColor: 'white',
-          borderBottom: '1px solid #e5e7eb',
-          overflowX: 'auto'
+      <RoleTabs activeRoleId={activeRoleId} allowedRoles={allowedRoles} onRoleChange={handleRoleChange} />
+
+      <ControlsRow
+        activeBuildingId={activeBuildingId} activeBuildings={activeBuildings}
+        allowedBuildings={allowedBuildings} activeRoleId={activeRoleId}
+        isDraft={isDraft} uploadedDocs={uploadedDocs} isUploading={isUploading}
+        isUploadingSwot={isUploadingSwot} swotResult={swotResult}
+        isUploadingCensus={isUploadingCensus} censusResult={censusResult}
+        showPlaybookForm={showPlaybookForm} playbookResult={playbookResult}
+        showHistory={showHistory} historyData={historyData}
+        showConversations={showConversations} conversationList={conversationList}
+        messages={messages}
+        onBuildingChange={handleBuildingChange} onDraftToggle={handleDraftToggle}
+        onFileUpload={handleFileUpload} onSwotUpload={handleSwotUpload}
+        onCensusUpload={handleCensusUpload}
+        onTogglePlaybook={() => { setShowPlaybookForm(!showPlaybookForm); if (!showPlaybookForm) fetchKnowledgeList(); }}
+        onToggleHistory={() => setShowHistory(!showHistory)}
+        onToggleConversations={() => { refreshConversationList(); setShowConversations(!showConversations); }}
+        onNewChat={() => {
+          if (messages.length > 0 && !window.confirm('Start a new chat? Current conversation will be cleared.')) return;
+          handleClearConversation();
+          setUploadedDocs([]);
         }}
-      >
-        {getRoleIds().filter(roleId => allowedRoles.includes(roleId)).map(roleId => {
-          const role = getRoleById(roleId);
-          const isActive = roleId === activeRoleId;
-          return (
-            <button
-              key={roleId}
-              onClick={() => handleRoleChange(roleId)}
-              className={`ihcm-tab ${isActive ? 'ihcm-tab-active' : ''}`}
-              style={{
-                padding: '8px 16px',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '14px',
-                fontWeight: '500',
-                backgroundColor: isActive ? role?.colorBg || '#e5e7eb' : 'transparent',
-                color: isActive ? role?.color || '#1f2937' : '#6b7280',
-                transition: 'all 0.2s ease',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              {role?.tab || roleId}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Controls Row: Building Selector & Draft Toggle */}
-      <div
-        className="ihcm-controls-row"
-        style={{
-          display: 'flex',
-          gap: '16px',
-          padding: '12px 24px',
-          backgroundColor: 'white',
-          borderBottom: '1px solid #e5e7eb',
-          alignItems: 'center'
-        }}
-      >
-        <select
-          value={activeBuildingId}
-          onChange={handleBuildingChange}
-          className="ihcm-building-select"
-          style={{
-            padding: '8px 12px',
-            borderRadius: '6px',
-            border: '1px solid #d1d5db',
-            backgroundColor: 'white',
-            fontSize: '14px',
-            cursor: 'pointer'
-          }}
-        >
-          {/* Show "All Buildings" only if user has access to all (allowedBuildings is null) */}
-          {!allowedBuildings && <option value="none">All Buildings</option>}
-          {(allowedBuildings
-            ? activeBuildings.filter(b => allowedBuildings.includes(b.id))
-            : activeBuildings
-          ).map(building => (
-            <option key={building.id} value={building.id}>
-              {building.label}
-            </option>
-          ))}
-        </select>
-
-        <button
-          onClick={handleDraftToggle}
-          className={`ihcm-draft-toggle ${isDraft ? 'ihcm-draft-toggle-active' : ''}`}
-          style={{
-            padding: '8px 16px',
-            borderRadius: '6px',
-            border: '1px solid #d1d5db',
-            backgroundColor: isDraft ? '#fef3c7' : '#f3f4f6',
-            cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: '500',
-            color: isDraft ? '#92400e' : '#6b7280',
-            transition: 'all 0.2s ease'
-          }}
-        >
-          {isDraft ? '✓ Draft Mode' : 'Draft Mode'}
-        </button>
-
-        {/* Upload 2567 button */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf"
-          multiple
-          onChange={handleFileUpload}
-          style={{ display: 'none' }}
-        />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isUploading}
-          style={{
-            padding: '8px 16px',
-            borderRadius: '6px',
-            border: '1px solid #d1d5db',
-            backgroundColor: uploadedDocs.length > 0 ? '#dcfce7' : '#f3f4f6',
-            cursor: isUploading ? 'not-allowed' : 'pointer',
-            fontSize: '14px',
-            fontWeight: '500',
-            color: uploadedDocs.length > 0 ? '#166534' : '#6b7280',
-            transition: 'all 0.2s ease',
-            whiteSpace: 'nowrap'
-          }}
-        >
-          {isUploading ? 'Parsing...' : uploadedDocs.length > 0
-            ? `✓ ${uploadedDocs.length} survey(s) saved (${uploadedDocs.reduce((sum, d) => sum + (d.total_citations || 0), 0)} tags)`
-            : 'Upload 2567'}
-        </button>
-
-        {/* SWOT upload — visible for marketing/admin/regional */}
-        {['marketing', 'admin', 'regional'].includes(activeRoleId) && (
-          <>
-            <input ref={swotInputRef} type="file" accept=".pdf,.docx,.doc,.txt"
-              onChange={handleSwotUpload} style={{ display: 'none' }} />
-            <button
-              onClick={() => swotInputRef.current?.click()}
-              disabled={isUploadingSwot}
-              style={{
-                padding: '8px 16px', borderRadius: '6px',
-                border: '1px solid #d1d5db',
-                backgroundColor: swotResult ? '#dcfce7' : '#f3f4f6',
-                cursor: isUploadingSwot ? 'not-allowed' : 'pointer',
-                fontSize: '14px', fontWeight: '500',
-                color: swotResult ? '#166534' : '#6b7280',
-                transition: 'all 0.2s ease', whiteSpace: 'nowrap',
-              }}
-            >
-              {isUploadingSwot ? 'Uploading...' : swotResult
-                ? `SWOT saved (${swotResult.results?.length || 0} building${swotResult.results?.length !== 1 ? 's' : ''})`
-                : 'Upload SWOT'}
-            </button>
-          </>
-        )}
-
-        {/* Census CSV upload */}
-        <input
-          ref={censusInputRef}
-          type="file"
-          accept=".csv"
-          onChange={handleCensusUpload}
-          style={{ display: 'none' }}
-        />
-        <button
-          onClick={() => censusInputRef.current?.click()}
-          disabled={isUploadingCensus}
-          style={{
-            padding: '8px 16px',
-            borderRadius: '6px',
-            border: '1px solid #d1d5db',
-            backgroundColor: censusResult ? '#dcfce7' : '#f3f4f6',
-            cursor: isUploadingCensus ? 'not-allowed' : 'pointer',
-            fontSize: '14px',
-            fontWeight: '500',
-            color: censusResult ? '#166534' : '#6b7280',
-            transition: 'all 0.2s ease',
-            whiteSpace: 'nowrap'
-          }}
-        >
-          {isUploadingCensus ? 'Uploading...' : censusResult
-            ? `Census updated (${censusResult.buildings?.length} buildings)`
-            : 'Upload Census'}
-        </button>
-
-        {/* Knowledge/Playbook upload */}
-        <button
-          onClick={() => { setShowPlaybookForm(!showPlaybookForm); if (!showPlaybookForm) fetchKnowledgeList(); }}
-          style={{
-            padding: '8px 16px',
-            borderRadius: '6px',
-            border: '1px solid #d1d5db',
-            backgroundColor: playbookResult ? '#dcfce7' : showPlaybookForm ? '#dbeafe' : '#f3f4f6',
-            cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: '500',
-            color: playbookResult ? '#166534' : showPlaybookForm ? '#1e40af' : '#6b7280',
-            transition: 'all 0.2s ease',
-            whiteSpace: 'nowrap'
-          }}
-        >
-          {playbookResult ? 'Playbook queued' : 'Add Playbook'}
-        </button>
-
-        {/* Building History toggle */}
-        {activeBuildingId && activeBuildingId !== 'none' && (
-          <button
-            onClick={() => setShowHistory(!showHistory)}
-            style={{
-              padding: '8px 16px',
-              borderRadius: '6px',
-              border: '1px solid #d1d5db',
-              backgroundColor: showHistory ? '#dbeafe' : '#f3f4f6',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: '500',
-              color: showHistory ? '#1e40af' : '#6b7280',
-              transition: 'all 0.2s ease',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            History {historyData.surveys.length + historyData.events.length > 0
-              ? `(${historyData.surveys.length + historyData.events.length})`
-              : ''}
-          </button>
-        )}
-
-        {/* Chat History & New Chat — pushed to the right */}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
-          <button
-            onClick={() => { refreshConversationList(); setShowConversations(!showConversations); }}
-            style={{
-              padding: '8px 16px',
-              borderRadius: '6px',
-              border: '1px solid #d1d5db',
-              backgroundColor: showConversations ? '#dbeafe' : '#f3f4f6',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: '500',
-              color: showConversations ? '#1e40af' : '#6b7280',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            Chat History {conversationList.length > 0 ? `(${conversationList.length})` : ''}
-          </button>
-          <button
-            onClick={() => {
-              if (messages.length > 0 && !window.confirm('Start a new chat? Current conversation will be cleared.')) return;
-              handleClearConversation();
-              setUploadedDocs([]);
-            }}
-            style={{
-              padding: '8px 16px',
-              borderRadius: '6px',
-              border: '1px solid #2563eb',
-              backgroundColor: '#eff6ff',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: '600',
-              color: '#2563eb',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            + New Chat
-          </button>
-        </div>
-      </div>
+        fileInputRef={fileInputRef} swotInputRef={swotInputRef} censusInputRef={censusInputRef}
+      />
 
       {/* Conversation History Panel */}
       {showConversations && (
@@ -1124,6 +915,7 @@ export default function App() {
           conversationId={conversationId}
           loading={loadingConversations}
           onLoadConversation={handleLoadConversation}
+          onDeleteConversation={handleDeleteConversation}
         />
       )}
 
@@ -1306,134 +1098,14 @@ export default function App() {
 
       {/* Workflow Selector & Panel */}
       {(isDraft || activeWorkflowId) && roleWorkflows.length > 0 && (
-        <div
-          className="ihcm-workflow-section"
-          style={{
-            padding: '12px 24px',
-            backgroundColor: 'white',
-            borderBottom: '1px solid #e5e7eb'
-          }}
-        >
-          <select
-            value={activeWorkflowId || ''}
-            onChange={handleWorkflowChange}
-            className="ihcm-workflow-select"
-            style={{
-              padding: '8px 12px',
-              borderRadius: '6px',
-              border: '1px solid #d1d5db',
-              backgroundColor: 'white',
-              fontSize: '14px',
-              cursor: 'pointer',
-              width: '100%'
-            }}
-          >
-            <option value="">Select a workflow...</option>
-            {roleWorkflows.map(wf => (
-              <option key={wf.id} value={wf.id}>
-                {wf.label}
-              </option>
-            ))}
-          </select>
-
-          {/* Workflow Panel */}
-          {activeWorkflow && showWorkflowPanel && (
-            <div
-              className="ihcm-workflow-panel"
-              style={{
-                marginTop: '12px',
-                padding: '16px',
-                backgroundColor: '#f3f4f6',
-                borderRadius: '6px',
-                border: '1px solid #d1d5db'
-              }}
-            >
-              <p style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#4b5563' }}>
-                {activeWorkflow.description}
-              </p>
-
-              {activeWorkflow.requiredInputs && activeWorkflow.requiredInputs.length > 0 && (
-                <div className="ihcm-workflow-inputs">
-                  {activeWorkflow.requiredInputs.map(input => (
-                    <div
-                      key={input.name}
-                      className="ihcm-workflow-input-group"
-                      style={{ marginBottom: '12px' }}
-                    >
-                      <label
-                        className="ihcm-workflow-input-label"
-                        style={{
-                          display: 'block',
-                          fontSize: '13px',
-                          fontWeight: '500',
-                          marginBottom: '6px',
-                          color: '#374151'
-                        }}
-                      >
-                        {input.label}
-                      </label>
-                      {input.type === 'textarea' ? (
-                        <textarea
-                          value={workflowInputs[input.name] || ''}
-                          onChange={e => handleWorkflowInputChange(input.name, e.target.value)}
-                          placeholder={input.placeholder || ''}
-                          className="ihcm-workflow-textarea"
-                          style={{
-                            width: '100%',
-                            padding: '8px 12px',
-                            borderRadius: '6px',
-                            border: '1px solid #d1d5db',
-                            fontSize: '13px',
-                            fontFamily: 'inherit',
-                            resize: 'vertical',
-                            minHeight: '80px'
-                          }}
-                        />
-                      ) : (
-                        <input
-                          type={input.type || 'text'}
-                          value={workflowInputs[input.name] || ''}
-                          onChange={e => handleWorkflowInputChange(input.name, e.target.value)}
-                          placeholder={input.placeholder || ''}
-                          className="ihcm-workflow-input"
-                          style={{
-                            width: '100%',
-                            padding: '8px 12px',
-                            borderRadius: '6px',
-                            border: '1px solid #d1d5db',
-                            fontSize: '13px',
-                            fontFamily: 'inherit',
-                            boxSizing: 'border-box'
-                          }}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <button
-                onClick={handleStartWorkflow}
-                disabled={isLoading}
-                className="ihcm-start-workflow-btn"
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: '6px',
-                  border: 'none',
-                  backgroundColor: activeRole?.color || '#3b82f6',
-                  color: 'white',
-                  cursor: isLoading ? 'not-allowed' : 'pointer',
-                  fontSize: '13px',
-                  fontWeight: '600',
-                  opacity: isLoading ? 0.6 : 1,
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                {isLoading ? 'Starting...' : 'Start Workflow'}
-              </button>
-            </div>
-          )}
-        </div>
+        <WorkflowPanel
+          activeWorkflowId={activeWorkflowId} activeWorkflow={activeWorkflow}
+          showWorkflowPanel={showWorkflowPanel} roleWorkflows={roleWorkflows}
+          workflowInputs={workflowInputs} isLoading={isLoading} activeRole={activeRole}
+          onWorkflowChange={handleWorkflowChange}
+          onWorkflowInputChange={handleWorkflowInputChange}
+          onStartWorkflow={handleStartWorkflow}
+        />
       )}
 
       {/* Messages Container */}
@@ -1617,141 +1289,27 @@ export default function App() {
         </div>
       )}
 
-      {/* Input Area */}
-      <div
-        className="ihcm-input-area"
-        style={{
-          padding: '16px 24px',
-          backgroundColor: 'white',
-          borderTop: '1px solid #e5e7eb'
+      <ChatInput
+        ref={inputRef}
+        inputText={inputText} isLoading={isLoading} activeRole={activeRole}
+        activeRoleId={activeRoleId} activeBuildingId={activeBuildingId}
+        activeBuildings={activeBuildings} messages={messages} uploadedDocs={uploadedDocs}
+        onInputChange={setInputText} onSend={() => sendMessage()} onClear={handleClearConversation}
+        onClearDocs={() => setUploadedDocs([])}
+        onExport={() => {
+          const text = messages.map(m =>
+            `${m.role === 'user' ? 'You' : 'IHCM Bot'}:\n${m.content}`
+          ).join('\n\n---\n\n');
+          const header = `IHCM AI Bot — ${activeRole?.name || 'Chat'}\n${activeBuildingId !== 'none' ? activeBuildings.find(b => b.id === activeBuildingId)?.label || '' : 'All Buildings'}\nExported: ${new Date().toLocaleString()}\n\n${'='.repeat(60)}\n\n`;
+          const blob = new Blob([header + text], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `ihcm-${activeRoleId}-${activeBuildingId}-${new Date().toISOString().split('T')[0]}.txt`;
+          a.click();
+          URL.revokeObjectURL(url);
         }}
-      >
-        <div
-          className="ihcm-input-wrapper"
-          style={{
-            display: 'flex',
-            gap: '12px',
-            alignItems: 'flex-end'
-          }}
-        >
-          <textarea
-            ref={inputRef}
-            value={inputText}
-            onChange={e => setInputText(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-              }
-            }}
-            placeholder="Type your message..."
-            disabled={isLoading}
-            className="ihcm-input-textarea"
-            style={{
-              flex: 1,
-              padding: '12px 16px',
-              borderRadius: '8px',
-              border: '1px solid #d1d5db',
-              fontSize: '14px',
-              fontFamily: 'inherit',
-              resize: 'none',
-              minHeight: '44px',
-              maxHeight: '120px',
-              boxSizing: 'border-box',
-              opacity: isLoading ? 0.6 : 1
-            }}
-          />
-          <button
-            onClick={() => sendMessage()}
-            disabled={isLoading || !inputText.trim()}
-            className="ihcm-send-button"
-            style={{
-              padding: '10px 20px',
-              borderRadius: '8px',
-              border: 'none',
-              backgroundColor: activeRole?.color || '#3b82f6',
-              color: 'white',
-              cursor: isLoading || !inputText.trim() ? 'not-allowed' : 'pointer',
-              fontSize: '14px',
-              fontWeight: '600',
-              opacity: isLoading || !inputText.trim() ? 0.6 : 1,
-              transition: 'all 0.2s ease',
-              whiteSpace: 'nowrap',
-              height: '44px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
-          >
-            {isLoading ? 'Sending...' : 'Send'}
-          </button>
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            gap: '12px',
-            marginTop: '8px',
-            fontSize: '12px',
-            color: '#9ca3af'
-          }}
-        >
-          <button
-            onClick={handleClearConversation}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#9ca3af',
-              cursor: 'pointer',
-              fontSize: '12px',
-              textDecoration: 'underline'
-            }}
-          >
-            Clear conversation
-          </button>
-          {uploadedDocs.length > 0 && (
-            <button
-              onClick={() => setUploadedDocs([])}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#9ca3af',
-                cursor: 'pointer',
-                fontSize: '12px',
-                textDecoration: 'underline'
-              }}
-            >
-              Clear 2567 context
-            </button>
-          )}
-          {messages.length > 0 && (
-            <button
-              onClick={() => {
-                const text = messages.map(m =>
-                  `${m.role === 'user' ? 'You' : 'IHCM Bot'}:\n${m.content}`
-                ).join('\n\n---\n\n');
-                const header = `IHCM AI Bot — ${activeRole?.name || 'Chat'}\n${activeBuildingId !== 'none' ? activeBuildings.find(b => b.id === activeBuildingId)?.label || '' : 'All Buildings'}\nExported: ${new Date().toLocaleString()}\n\n${'='.repeat(60)}\n\n`;
-                const blob = new Blob([header + text], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `ihcm-${activeRoleId}-${activeBuildingId}-${new Date().toISOString().split('T')[0]}.txt`;
-                a.click();
-                URL.revokeObjectURL(url);
-              }}
-              style={{
-                background: 'none', border: 'none', color: '#9ca3af',
-                cursor: 'pointer', fontSize: '12px', textDecoration: 'underline'
-              }}
-            >
-              Export conversation
-            </button>
-          )}
-          <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#d97706' }}>
-            Do not enter patient names, DOBs, SSNs, or other PHI
-          </span>
-        </div>
-      </div>
+      />
 
       <style>{`
         @keyframes pulse {

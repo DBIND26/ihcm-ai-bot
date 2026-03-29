@@ -176,6 +176,62 @@ export default async function handler(req, res) {
     }
     results.usage_by_role = roleCounts;
 
+    // ── Activity trend (conversations per day, last 30 days) ──
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: trendConvs } = await supabase
+      .from('conversations')
+      .select('created_at')
+      .gte('created_at', thirtyDaysAgo)
+      .order('created_at', { ascending: true });
+
+    const activityByDay = {};
+    for (const c of (trendConvs || [])) {
+      const day = c.created_at.split('T')[0];
+      activityByDay[day] = (activityByDay[day] || 0) + 1;
+    }
+    // Fill in missing days with 0
+    const activityTrend = [];
+    const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    for (let i = 0; i <= 30; i++) {
+      const d = new Date(startDate.getTime() + i * 24 * 60 * 60 * 1000);
+      const key = d.toISOString().split('T')[0];
+      activityTrend.push({ date: key, count: activityByDay[key] || 0 });
+    }
+    results.activity_trend = activityTrend;
+
+    // ── Feedback trend (last 30 days, by day) ──
+    const { data: trendFeedback } = await supabase
+      .from('feedback_events')
+      .select('rating, created_at')
+      .gte('created_at', thirtyDaysAgo)
+      .order('created_at', { ascending: true });
+
+    const feedbackByDay = {};
+    for (const f of (trendFeedback || [])) {
+      const day = f.created_at.split('T')[0];
+      if (!feedbackByDay[day]) feedbackByDay[day] = { useful: 0, not_useful: 0, questionable: 0 };
+      feedbackByDay[day][f.rating] = (feedbackByDay[day][f.rating] || 0) + 1;
+    }
+    const feedbackTrend = [];
+    for (let i = 0; i <= 30; i++) {
+      const d = new Date(startDate.getTime() + i * 24 * 60 * 60 * 1000);
+      const key = d.toISOString().split('T')[0];
+      const fb = feedbackByDay[key] || { useful: 0, not_useful: 0, questionable: 0 };
+      feedbackTrend.push({ date: key, ...fb });
+    }
+    results.feedback_trend = feedbackTrend;
+
+    // ── Usage by building ──
+    const { data: buildingUsage } = await supabase
+      .from('conversations')
+      .select('facility_id');
+    const buildingCounts = {};
+    for (const c of (buildingUsage || [])) {
+      const name = c.facility_id ? facilityMap[c.facility_id] || 'Unknown' : 'All Buildings';
+      buildingCounts[name] = (buildingCounts[name] || 0) + 1;
+    }
+    results.usage_by_building = buildingCounts;
+
     return res.status(200).json(results);
 
   } catch (err) {
