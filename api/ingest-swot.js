@@ -126,19 +126,24 @@ async function extractTextFromFile(buffer, fileName) {
   }
 
   if (ext === 'docx' || ext === 'doc') {
-    // Basic DOCX text extraction (DOCX is a ZIP of XML files)
+    // DOCX text extraction — preserves paragraph breaks for header detection
     try {
       const JSZip = (await import('jszip')).default;
       const zip = await JSZip.loadAsync(buffer);
       const docXml = await zip.file('word/document.xml')?.async('text');
       if (docXml) {
         return docXml
-          .replace(/<w:p[^>]*>/g, '\n')
-          .replace(/<[^>]+>/g, '')
+          .replace(/<w:p[^>]*>/g, '\n')          // paragraph breaks
+          .replace(/<w:br[^>]*>/g, '\n')          // explicit breaks
+          .replace(/<w:tab[^>]*>/g, '\t')         // tabs (common in headings)
+          .replace(/<[^>]+>/g, '')                 // strip remaining XML
           .replace(/&amp;/g, '&')
           .replace(/&lt;/g, '<')
           .replace(/&gt;/g, '>')
-          .replace(/\s+/g, ' ')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'")
+          .replace(/[ \t]+/g, ' ')                // collapse spaces within lines (not newlines)
+          .replace(/\n\s*\n\s*\n/g, '\n\n')       // max double newlines
           .trim();
       }
     } catch (err) {
@@ -220,6 +225,19 @@ export default async function handler(req, res) {
       if (buildingSlugs.length > 3) {
         console.warn(`[ingest-swot] Detected ${buildingSlugs.length} buildings — likely noise, storing as portfolio`);
         buildingSlugs = [];
+      }
+
+      // Secondary detection for single-building docs: if header detection found nothing,
+      // check the first 500 chars for any building name (likely the document subject)
+      if (buildingSlugs.length === 0) {
+        const topText = textContent.slice(0, 500).toLowerCase();
+        for (const [keyword, slug] of Object.entries(BUILDING_KEYWORDS)) {
+          if (topText.includes(keyword)) {
+            buildingSlugs = [slug];
+            console.log(`[ingest-swot] Secondary detection: found "${keyword}" in first 500 chars → ${slug}`);
+            break;
+          }
+        }
       }
     }
 

@@ -16,8 +16,9 @@ export default function ControlsRow({
       className="ihcm-controls-row"
       style={{
         display: 'flex',
-        gap: '16px',
-        padding: '12px 24px',
+        flexWrap: 'wrap',
+        gap: '8px 12px',
+        padding: '10px 16px',
         backgroundColor: 'white',
         borderBottom: '1px solid #e5e7eb',
         alignItems: 'center'
@@ -28,8 +29,8 @@ export default function ControlsRow({
         onChange={onBuildingChange}
         className="ihcm-building-select"
         style={{
-          padding: '8px 12px', borderRadius: '6px', border: '1px solid #d1d5db',
-          backgroundColor: 'white', fontSize: '14px', cursor: 'pointer'
+          padding: '6px 10px', borderRadius: '6px', border: '1px solid #d1d5db',
+          backgroundColor: 'white', fontSize: '13px', cursor: 'pointer'
         }}
       >
         {!allowedBuildings && <option value="none">All Buildings</option>}
@@ -45,9 +46,9 @@ export default function ControlsRow({
         onClick={onDraftToggle}
         className={`ihcm-draft-toggle ${isDraft ? 'ihcm-draft-toggle-active' : ''}`}
         style={{
-          padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db',
+          padding: '6px 12px', borderRadius: '6px', border: '1px solid #d1d5db',
           backgroundColor: isDraft ? '#fef3c7' : '#f3f4f6', cursor: 'pointer',
-          fontSize: '14px', fontWeight: '500',
+          fontSize: '13px', fontWeight: '500',
           color: isDraft ? '#92400e' : '#6b7280', transition: 'all 0.2s ease'
         }}
       >
@@ -60,10 +61,10 @@ export default function ControlsRow({
         onClick={() => fileInputRef.current?.click()}
         disabled={isUploading}
         style={{
-          padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db',
+          padding: '6px 12px', borderRadius: '6px', border: '1px solid #d1d5db',
           backgroundColor: uploadedDocs.length > 0 ? '#dcfce7' : '#f3f4f6',
           cursor: isUploading ? 'not-allowed' : 'pointer',
-          fontSize: '14px', fontWeight: '500',
+          fontSize: '13px', fontWeight: '500',
           color: uploadedDocs.length > 0 ? '#166534' : '#6b7280',
           transition: 'all 0.2s ease', whiteSpace: 'nowrap'
         }}
@@ -81,10 +82,10 @@ export default function ControlsRow({
             onClick={() => swotInputRef.current?.click()}
             disabled={isUploadingSwot}
             style={{
-              padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db',
+              padding: '6px 12px', borderRadius: '6px', border: '1px solid #d1d5db',
               backgroundColor: swotResult ? '#dcfce7' : '#f3f4f6',
               cursor: isUploadingSwot ? 'not-allowed' : 'pointer',
-              fontSize: '14px', fontWeight: '500',
+              fontSize: '13px', fontWeight: '500',
               color: swotResult ? '#166534' : '#6b7280',
               transition: 'all 0.2s ease', whiteSpace: 'nowrap',
             }}
@@ -102,10 +103,10 @@ export default function ControlsRow({
         onClick={() => censusInputRef.current?.click()}
         disabled={isUploadingCensus}
         style={{
-          padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db',
+          padding: '6px 12px', borderRadius: '6px', border: '1px solid #d1d5db',
           backgroundColor: censusResult ? '#dcfce7' : '#f3f4f6',
           cursor: isUploadingCensus ? 'not-allowed' : 'pointer',
-          fontSize: '14px', fontWeight: '500',
+          fontSize: '13px', fontWeight: '500',
           color: censusResult ? '#166534' : '#6b7280',
           transition: 'all 0.2s ease', whiteSpace: 'nowrap'
         }}
@@ -119,7 +120,7 @@ export default function ControlsRow({
       <button
         onClick={onTogglePlaybook}
         style={{
-          padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db',
+          padding: '6px 12px', borderRadius: '6px', border: '1px solid #d1d5db',
           backgroundColor: playbookResult ? '#dcfce7' : showPlaybookForm ? '#dbeafe' : '#f3f4f6',
           cursor: 'pointer', fontSize: '14px', fontWeight: '500',
           color: playbookResult ? '#166534' : showPlaybookForm ? '#1e40af' : '#6b7280',
@@ -134,7 +135,7 @@ export default function ControlsRow({
         <button
           onClick={onToggleHistory}
           style={{
-            padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db',
+            padding: '6px 12px', borderRadius: '6px', border: '1px solid #d1d5db',
             backgroundColor: showHistory ? '#dbeafe' : '#f3f4f6',
             cursor: 'pointer', fontSize: '14px', fontWeight: '500',
             color: showHistory ? '#1e40af' : '#6b7280',
@@ -148,13 +149,13 @@ export default function ControlsRow({
       )}
 
       {/* Chat History & New Chat */}
-      <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+      <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexShrink: 0 }}>
         <button
           onClick={onToggleConversations}
           style={{
-            padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db',
+            padding: '6px 12px', borderRadius: '6px', border: '1px solid #d1d5db',
             backgroundColor: showConversations ? '#dbeafe' : '#f3f4f6',
-            cursor: 'pointer', fontSize: '14px', fontWeight: '500',
+            cursor: 'pointer', fontSize: '13px', fontWeight: '500',
             color: showConversations ? '#1e40af' : '#6b7280', whiteSpace: 'nowrap'
           }}
         >
@@ -163,9 +164,9 @@ export default function ControlsRow({
         <button
           onClick={onNewChat}
           style={{
-            padding: '8px 16px', borderRadius: '6px', border: '1px solid #2563eb',
+            padding: '6px 12px', borderRadius: '6px', border: '1px solid #2563eb',
             backgroundColor: '#eff6ff', cursor: 'pointer',
-            fontSize: '14px', fontWeight: '600', color: '#2563eb', whiteSpace: 'nowrap'
+            fontSize: '13px', fontWeight: '600', color: '#2563eb', whiteSpace: 'nowrap'
           }}
         >
           + New Chat

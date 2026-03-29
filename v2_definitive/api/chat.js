@@ -303,11 +303,12 @@ OUTPUT FORMAT — DRAFT MODE ACTIVE:
  * Fetch building context from Supabase (profile + snapshot + intelligence).
  * Returns null if Supabase is not connected or query fails.
  */
-async function fetchBuildingContext(buildingSlug) {
-  if (!supabase || !buildingSlug || buildingSlug === 'none') return null;
+async function fetchBuildingContext(buildingSlug, db) {
+  const client = db || supabase;
+  if (!client || !buildingSlug || buildingSlug === 'none') return null;
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from('v_bot_building_context')
       .select('*')
       .eq('slug', buildingSlug)
@@ -329,8 +330,9 @@ async function fetchBuildingContext(buildingSlug) {
  * Fetch relevant knowledge sources for the current role and building.
  * Returns a formatted text block, or null if none found.
  */
-async function fetchKnowledgeContext(roleId, facilityId, stateCode) {
-  if (!supabase) return null;
+async function fetchKnowledgeContext(roleId, facilityId, stateCode, db) {
+  const client = db || supabase;
+  if (!client) return null;
 
   try {
     // Map roles to relevant source types
@@ -358,7 +360,7 @@ async function fetchKnowledgeContext(roleId, facilityId, stateCode) {
     };
 
     if (facilityId) {
-      const { data: facilitySources, error: facilityError } = await supabase
+      const { data: facilitySources, error: facilityError } = await client
         .from('knowledge_sources')
         .select('source_id, title, source_type, citation_text, full_content, state_code, facility_id, tags')
         .eq('status', 'approved')
@@ -371,7 +373,7 @@ async function fetchKnowledgeContext(roleId, facilityId, stateCode) {
       collectSources(facilitySources);
     }
 
-    let scopeQuery = supabase
+    let scopeQuery = client
       .from('knowledge_sources')
       .select('source_id, title, source_type, citation_text, full_content, state_code, facility_id, tags')
       .eq('status', 'approved')
@@ -577,7 +579,7 @@ export default async function handler(req, res) {
     if (!auth) {
       return res.status(401).json({ error: 'Unauthorized — valid session required' });
     }
-    const { user: authUser, profile: authProfile } = auth;
+    const { user: authUser, profile: authProfile, supabaseUser: authDb } = auth;
 
     const { botId, buildingId, isDraft, messages, workflowId, documentContext, historyContext } = req.body;
     const userName = authProfile.full_name || authUser.email;
@@ -607,10 +609,11 @@ export default async function handler(req, res) {
     }
 
     // ── Fetch context layers ──
-    const buildingContext = await fetchBuildingContext(buildingId);
+    // Use RLS-enforced client for reads (falls back to module-level service client)
+    const buildingContext = await fetchBuildingContext(buildingId, authDb);
     const stateCode = buildingContext?.state || null;
     const facilityId = buildingContext?.facility_id || null;
-    const knowledgeContext = await fetchKnowledgeContext(botId, facilityId, stateCode);
+    const knowledgeContext = await fetchKnowledgeContext(botId, facilityId, stateCode, authDb);
 
     // ── Assemble system prompt ──
     const systemPrompt = assembleSystemPrompt({

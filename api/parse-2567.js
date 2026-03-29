@@ -223,8 +223,16 @@ function extractScopeSeverity(text) {
   match = firstLines.match(/F\s*\d{3,4}\s+([A-L])\b/);
   if (match) return match[1].toUpperCase();
 
+  // CMS grid: severity letter in parentheses like "(D)" or "(F)"
+  match = text.match(/\(([D-L])\)/);
+  if (match) return match[1].toUpperCase();
+
+  // CMS table: "SCOPE AND SEVERITY: D" or "S&S: F"
+  match = text.match(/(?:SCOPE\s+AND\s+SEVERITY|S\s*&\s*S)\s*[:\-]?\s*([A-L])\b/i);
+  if (match) return match[1].toUpperCase();
+
   // Last resort: any standalone capital letter D-L on a short line in the section header area
-  for (const line of text.split('\n').slice(0, 6)) {
+  for (const line of text.split('\n').slice(0, 8)) {
     const trimmed = line.trim();
     if (trimmed.length >= 1 && trimmed.length <= 3 && /^[D-L]$/.test(trimmed)) {
       return trimmed.toUpperCase();
@@ -261,11 +269,13 @@ function stripFormNoise(text) {
 function extractDeficientPractice(text) {
   const cleaned = stripFormNoise(text);
 
-  // Try explicit markers
+  // Try explicit markers — ordered by specificity
   const patterns = [
-    /(?:DEFICIENT\s+PRACTICE|DEFICIENCY)[:\-]?\s*(.+?)(?:\n\s*\n|\nFINDINGS)/is,
-    /(Based\s+on\s+(?:observation|interview|record\s+review|a\s+review).+?)(?:\n\s*\n|\nFINDINGS)/is,
-    /((?:The\s+facility|This\s+(?:facility|provider))\s+(?:failed|did\s+not).+?)(?:\n\s*\n)/is,
+    /(?:DEFICIENT\s+PRACTICE|DEFICIENCY)[:\-]?\s*(.+?)(?:\n\s*\n|\nFINDINGS|\nBased\s+on)/is,
+    /(Based\s+on\s+(?:observation|interview|record\s+review|a\s+review|documentation).+?)(?:\n\s*\n|\nFINDINGS)/is,
+    /((?:The\s+facility|This\s+(?:facility|provider)|The\s+provider)\s+(?:failed|did\s+not|was\s+not).+?)(?:\n\s*\n)/is,
+    /((?:Failure|Failed)\s+to\s+.+?)(?:\n\s*\n)/is,
+    /SUMMARY\s+STATEMENT[^\n]*\n(.+?)(?:\n\s*\n|\nFINDINGS|\nBased\s+on)/is,
   ];
 
   for (const pat of patterns) {
@@ -346,25 +356,32 @@ function parseCitations(fullText) {
     return num >= 150 && num <= 999;
   };
 
-  // Find all F-tag markers
-  const tagPattern = /(?:^|\n)\s*F\s*[\-\s]?(\d{3,4})\b/gm;
-  const matches = [];
-  let m;
-  while ((m = tagPattern.exec(fullText)) !== null) {
-    if (isValidFTag(m[1])) {
-      matches.push({ tag: m[1], index: m.index });
-    }
-  }
+  // Find all F-tag markers — try multiple patterns for different CMS form layouts
+  const tagPatterns = [
+    /(?:^|\n)\s*F\s*[\-\s]?(\d{3,4})\b/gm,           // Standard: "F 689" or "F-689"
+    /(?:^|\n)\s*F(\d{3,4})\s/gm,                       // No separator: "F689 "
+    /Tag\s+F\s*(\d{3,4})/gi,                            // Explicit: "Tag F689"
+    /\bF[\-\.]?(\d{3,4})\s*(?:\-|–|—)\s*(?:\d{3})?/gm, // Table: "F689 - 483.xx" or "F.689"
+    /ID\s+PREFIX\s+TAG[^\n]*\n\s*F\s*(\d{3,4})/gm,     // CMS form header: "ID PREFIX TAG\n F689"
+  ];
 
-  // Alternate pattern: "Tag F689"
-  if (matches.length === 0) {
-    const altPattern = /Tag\s+F\s*(\d{3,4})/gi;
-    while ((m = altPattern.exec(fullText)) !== null) {
-      if (isValidFTag(m[1])) {
+  const matches = [];
+  const seenIndices = new Set();
+  let m;
+
+  for (const pattern of tagPatterns) {
+    pattern.lastIndex = 0;
+    while ((m = pattern.exec(fullText)) !== null) {
+      if (isValidFTag(m[1]) && !seenIndices.has(m.index)) {
         matches.push({ tag: m[1], index: m.index });
+        seenIndices.add(m.index);
       }
     }
+    if (matches.length > 0) break; // Use first pattern that finds tags
   }
+
+  // Sort by position in document
+  matches.sort((a, b) => a.index - b.index);
 
   for (let i = 0; i < matches.length; i++) {
     const fTag = `F${matches[i].tag}`;
@@ -527,14 +544,21 @@ export default async function handler(req, res) {
     const pdfData = await pdf(fileBuffer);
     const fullText = pdfData.text || '';
 
-    if (!fullText.trim()) {
+    if (!fullText.trim() || fullText.trim().length < 50) {
       return res.status(200).json({
-        error: 'No text extracted from PDF. The file may be a scanned image — OCR is not yet supported.',
-        raw_text_length: 0,
+        error: 'No text extracted from PDF. The file may be a scanned image — OCR is not yet supported. Try a digitally-generated 2567 (not a photocopy/scan).',
+        raw_text_length: fullText.length,
         citations: [],
         total_citations: 0,
         critical_tags: [],
       });
+    }
+
+    // Check for low text density (possible partial OCR or image-heavy PDF)
+    const alphaRatio = (fullText.match(/[a-zA-Z]/g) || []).length / fullText.length;
+    const hasFormMarkers = /STATEMENT\s+OF\s+DEFICIENCIES|FORM\s+CMS/i.test(fullText.slice(0, 5000));
+    if (alphaRatio < 0.3 && !hasFormMarkers) {
+      console.warn(`[parse-2567] Low text density (${(alphaRatio * 100).toFixed(1)}% alpha) — possible scan`);
     }
 
     const headerInfo = parseHeader(fullText);
@@ -542,12 +566,29 @@ export default async function handler(req, res) {
     const criticalTags = classifySeverity(citations);
 
     // Assess parse quality for confidence banner
-    const nullSeverityCount = citations.filter(c => !c.scope_severity).length;
+    const nullSeverityCount = citations.filter(c => !c.scope_severity || c.scope_severity.includes('*')).length;
+    const nullFindingsCount = citations.filter(c => !c.findings || c.findings.length < 20).length;
     const hasValidName = headerInfo.facility_name && headerInfo.facility_name.length > 3;
     const hasDate = !!headerInfo.survey_date;
-    const parseQuality = (citations.length > 0 && nullSeverityCount < citations.length / 2 && hasValidName && hasDate)
-      ? 'good'
-      : (citations.length > 0 ? 'partial' : 'poor');
+
+    let parseQuality = 'poor';
+    let parseWarning = null;
+
+    if (citations.length === 0) {
+      parseQuality = 'poor';
+      parseWarning = 'No F-tag citations found. This may not be a CMS 2567 Statement of Deficiencies, or the format could not be parsed.';
+    } else if (nullSeverityCount > citations.length / 2) {
+      parseQuality = 'partial';
+      parseWarning = `Severity could not be determined for ${nullSeverityCount} of ${citations.length} citations. Verify scope/severity manually.`;
+    } else if (!hasValidName && !hasDate) {
+      parseQuality = 'partial';
+      parseWarning = 'Facility name and survey date could not be extracted. Please verify header information.';
+    } else if (nullFindingsCount > citations.length / 2) {
+      parseQuality = 'partial';
+      parseWarning = `Findings text is missing or incomplete for ${nullFindingsCount} of ${citations.length} citations. The PDF format may not be fully supported.`;
+    } else {
+      parseQuality = 'good';
+    }
 
     const result = {
       ...headerInfo,
@@ -556,9 +597,7 @@ export default async function handler(req, res) {
       critical_tags: criticalTags,
       raw_text_length: fullText.length,
       parse_quality: parseQuality,
-      parse_warning: parseQuality !== 'good'
-        ? 'Auto-parsed from PDF. Please verify facility name, F-tags, and severity before use.'
-        : null,
+      parse_warning: parseWarning,
     };
 
     console.log(`[parse-2567] Parsed: ${citations.length} citations, ${fullText.length} chars, quality: ${parseQuality}`);
