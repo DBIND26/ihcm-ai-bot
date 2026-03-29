@@ -12,6 +12,7 @@ import RoleTabs from './components/RoleTabs.jsx';
 import ControlsRow from './components/ControlsRow.jsx';
 import WorkflowPanel from './components/WorkflowPanel.jsx';
 import ChatInput from './components/ChatInput.jsx';
+import HospitalizationResult from './components/HospitalizationResult.jsx';
 import { supabase } from './lib/supabase.js';
 
 export default function App() {
@@ -83,6 +84,9 @@ export default function App() {
   const [isUploadingPlaybook, setIsUploadingPlaybook] = useState(false);
   const [playbookResult, setPlaybookResult] = useState(null);
   const [knowledgeList, setKnowledgeList] = useState([]);
+
+  // Hospitalization review state
+  const [hospResult, setHospResult] = useState(null);
 
   // Welcome guide state — guarded read for privacy-restricted browsers
   const [seenWelcome, setSeenWelcome] = useState(() => {
@@ -232,6 +236,57 @@ export default function App() {
 
     if (missingRequired.length > 0) {
       setError(`Please fill in: ${missingRequired.map(i => i.label).join(', ')}`);
+      return;
+    }
+
+    // Hospitalization review workflows route to dedicated API
+    if (activeWorkflowId.startsWith('hospitalization_review_')) {
+      setIsLoading(true);
+      setError(null);
+      setHospResult(null);
+      try {
+        const parseBool = (v) => {
+          if (!v) return null;
+          const lower = v.toLowerCase().trim();
+          return lower === 'yes' || lower === 'true' || lower === 'y';
+        };
+
+        const res = await fetch('/api/hospitalization-review', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({
+            buildingId: activeBuildingId !== 'none' ? activeBuildingId : null,
+            transferDate: workflowInputs.transferDate,
+            transferTimeCategory: workflowInputs.transferTimeCategory || 'business_hours',
+            daysSinceAdmission: workflowInputs.daysSinceAdmission ? parseInt(workflowInputs.daysSinceAdmission, 10) : null,
+            primaryDiagnosis: workflowInputs.primaryDiagnosis,
+            diagnosisCategory: workflowInputs.diagnosisCategory || 'other',
+            presentOnAdmission: parseBool(workflowInputs.presentOnAdmission),
+            physicianNotified: parseBool(workflowInputs.physicianNotified),
+            conditionChangeDocumented: parseBool(workflowInputs.conditionChangeDocumented),
+            interactToolUsed: parseBool(workflowInputs.interactToolUsed),
+            payerType: workflowInputs.payerType || null,
+            readmissionFlag: parseBool(workflowInputs.readmissionFlag),
+            additionalContext: workflowInputs.additionalContext || null,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to submit review');
+
+        setHospResult(data);
+
+        // Add a summary message to chat
+        const summaryMsg = { role: 'assistant', content: `**Hospitalization Review Submitted**\n\nAI Classification: **${data.ai_avoidability || 'pending'}**\n\n${data.ai_reasoning || ''}\n\nPlease review the analysis below and confirm or override the classification.` };
+        setMessages(prev => [...prev, summaryMsg]);
+      } catch (err) {
+        setError(err.message || 'Failed to submit hospitalization review');
+      } finally {
+        setIsLoading(false);
+        setShowWorkflowPanel(false);
+        setActiveWorkflowId(null);
+        setWorkflowInputs({});
+      }
       return;
     }
 
@@ -638,6 +693,7 @@ export default function App() {
     setWorkflowInputs({});
     setFeedback({});
     setConversationId(null);
+    setHospResult(null);
   };
 
   // Load a specific conversation from server
@@ -1181,6 +1237,17 @@ export default function App() {
             feedback={feedback}
             onFeedback={handleFeedback}
             conversationId={conversationId}
+          />
+        )}
+
+        {/* Hospitalization Review Result */}
+        {hospResult && (
+          <HospitalizationResult
+            result={hospResult}
+            authHeaders={authHeaders}
+            onConfirm={(final) => {
+              setHospResult(prev => ({ ...prev, confirmed: true, final_avoidability: final }));
+            }}
           />
         )}
         

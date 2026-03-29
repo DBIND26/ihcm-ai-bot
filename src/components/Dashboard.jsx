@@ -79,8 +79,12 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
           <SummaryCard
             label="Hospitalizations"
             value={hospStats.total}
-            sub={hospStats.avoidable_pct != null ? `${hospStats.avoidable_pct}% avoidable` : `${hospStats.pending} pending`}
-            color={hospStats.avoidable_pct > 30 ? '#dc2626' : hospStats.avoidable_pct > 15 ? '#d97706' : '#166534'}
+            sub={hospStats.final_avoidable_pct != null
+              ? `${hospStats.final_avoidable_pct}% confirmed avoidable`
+              : hospStats.ai_avoidable_pct != null
+                ? `${hospStats.ai_avoidable_pct}% AI-flagged (${hospStats.pending} pending review)`
+                : `${hospStats.pending} pending`}
+            color={(hospStats.final_avoidable_pct || hospStats.ai_avoidable_pct || 0) > 30 ? '#dc2626' : (hospStats.final_avoidable_pct || hospStats.ai_avoidable_pct || 0) > 15 ? '#d97706' : '#166534'}
           />
         )}
       </div>

@@ -2,9 +2,11 @@
 // Hospitalization Review endpoint — GET/POST/PATCH /api/hospitalization-review
 // ============================================================================
 // Submit anonymized hospitalization reviews with AI avoidability analysis,
-// list reviews by building, and get aggregate stats.
+// list reviews by building, get aggregate stats, and confirm/override AI.
 //
-// HIDDEN FEATURE — not exposed in UI until enabled.
+// Role-restricted: DON, Admin, MDS, Regional (+ super_admin, corporate_admin)
+// PHI guardrails: server-side pattern rejection on free-text fields
+// AI output: structured JSON parsing (not regex on plain text)
 
 import { requireAuth } from './lib/requireAuth.js';
 
@@ -20,6 +22,33 @@ const ROOT_CAUSE_OPTIONS = [
   'equipment', 'process_failure', 'after_hours_coverage',
 ];
 
+const ALLOWED_APP_ROLES = ['super_admin', 'corporate_admin', 'regional_director', 'facility_admin'];
+const ALLOWED_BOT_ROLES = ['don', 'admin', 'mds', 'regional'];
+
+// PHI detection patterns — reject if any match
+const PHI_PATTERNS = [
+  /\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b/,                    // SSN
+  /\b\d{2}\/\d{2}\/(?:19|20)\d{2}\b/,                       // DOB (MM/DD/YYYY)
+  /\b(?:DOB|date\s+of\s+birth)\s*[:\-]?\s*\d/i,            // DOB label
+  /\b(?:MRN|medical\s+record)\s*[:\-#]?\s*\d{4,}/i,        // MRN
+  /\b(?:room|bed)\s*[:\-#]?\s*\d{1,4}[A-Za-z]?\b/i,        // Room/bed number
+  /\b[A-Z][a-z]+\s+[A-Z][a-z]+\s*,?\s*(?:Jr|Sr|III?|IV)?\s*(?:,\s*\d{2,3}\s*(?:y\.?o\.?|years?\s*old))/i, // Name + age
+];
+
+function containsPHI(text) {
+  if (!text) return false;
+  return PHI_PATTERNS.some(pat => pat.test(text));
+}
+
+function checkPHIFields(fields) {
+  for (const [name, value] of Object.entries(fields)) {
+    if (typeof value === 'string' && containsPHI(value)) {
+      return `The "${name}" field appears to contain protected health information (PHI). Please remove patient names, DOBs, SSNs, MRNs, and room numbers before submitting.`;
+    }
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   const origin = req.headers.origin || '';
   if (origin.endsWith('.vercel.app') || origin.startsWith('http://localhost')) {
@@ -31,21 +60,27 @@ export default async function handler(req, res) {
 
   const auth = await requireAuth(req);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
-  const { user, supabase, supabaseUser } = auth;
+  const { user, profile, supabase, supabaseUser } = auth;
+
+  // Role check
+  const hasAppRole = ALLOWED_APP_ROLES.includes(profile.app_role);
+  const hasBotRole = (profile.allowed_bot_roles || []).some(r => ALLOWED_BOT_ROLES.includes(r));
+  if (!hasAppRole && !hasBotRole) {
+    return res.status(403).json({ error: 'Hospitalization review requires DON, Admin, MDS, or Regional access' });
+  }
 
   try {
     // ── GET: list reviews or get stats ──
     if (req.method === 'GET') {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const building = url.searchParams.get('building');
-      const mode = url.searchParams.get('mode'); // 'stats' or 'list' (default)
+      const mode = url.searchParams.get('mode');
       const months = parseInt(url.searchParams.get('months') || '12', 10);
 
       const cutoff = new Date();
       cutoff.setMonth(cutoff.getMonth() - months);
       const cutoffDate = cutoff.toISOString().split('T')[0];
 
-      // Resolve building slug if provided
       let facilityId = null;
       if (building && building !== 'all') {
         const { data: fac } = await supabaseUser
@@ -57,7 +92,6 @@ export default async function handler(req, res) {
       }
 
       if (mode === 'stats') {
-        // Aggregate stats
         let query = supabaseUser
           .from('hospitalization_reviews')
           .select('facility_id, transfer_date, diagnosis_category, ai_avoidability, final_avoidability, transfer_time_category, readmission_flag, payer_type')
@@ -68,61 +102,52 @@ export default async function handler(req, res) {
         const { data: reviews, error } = await query;
         if (error) return res.status(500).json({ error: error.message });
 
-        // Build stats
         const total = reviews.length;
-        const withDetermination = reviews.filter(r => r.final_avoidability);
-        const avoidable = withDetermination.filter(r => r.final_avoidability === 'avoidable').length;
-        const possiblyAvoidable = withDetermination.filter(r => r.final_avoidability === 'possibly_avoidable').length;
-        const unavoidable = withDetermination.filter(r => r.final_avoidability === 'unavoidable').length;
+        const withFinal = reviews.filter(r => r.final_avoidability);
+        const withAI = reviews.filter(r => r.ai_avoidability);
+        const finalAvoidable = withFinal.filter(r => r.final_avoidability === 'avoidable').length;
+        const aiAvoidable = withAI.filter(r => r.ai_avoidability === 'avoidable').length;
         const pending = reviews.filter(r => !r.final_avoidability).length;
         const readmissions = reviews.filter(r => r.readmission_flag).length;
 
-        // By category
         const byCategory = {};
-        for (const r of reviews) {
-          byCategory[r.diagnosis_category] = (byCategory[r.diagnosis_category] || 0) + 1;
-        }
-
-        // By time of day
         const byTimeOfDay = {};
-        for (const r of reviews) {
-          byTimeOfDay[r.transfer_time_category] = (byTimeOfDay[r.transfer_time_category] || 0) + 1;
-        }
-
-        // By month
         const byMonth = {};
         for (const r of reviews) {
-          const month = r.transfer_date.slice(0, 7); // YYYY-MM
-          if (!byMonth[month]) byMonth[month] = { total: 0, avoidable: 0 };
+          byCategory[r.diagnosis_category] = (byCategory[r.diagnosis_category] || 0) + 1;
+          byTimeOfDay[r.transfer_time_category] = (byTimeOfDay[r.transfer_time_category] || 0) + 1;
+          const month = r.transfer_date.slice(0, 7);
+          if (!byMonth[month]) byMonth[month] = { total: 0, avoidable: 0, ai_avoidable: 0 };
           byMonth[month].total++;
           if (r.final_avoidability === 'avoidable') byMonth[month].avoidable++;
+          if (r.ai_avoidability === 'avoidable') byMonth[month].ai_avoidable++;
         }
 
-        // By building (portfolio view)
-        const byBuilding = {};
         const { data: facilities } = await supabaseUser
           .from('facilities')
           .select('facility_id, facility_code, facility_name');
         const facMap = {};
         for (const f of (facilities || [])) facMap[f.facility_id] = f;
 
+        const byBuilding = {};
         for (const r of reviews) {
           const fac = facMap[r.facility_id];
           const slug = fac?.facility_code || 'unknown';
-          if (!byBuilding[slug]) byBuilding[slug] = { name: fac?.facility_name || slug, total: 0, avoidable: 0, readmissions: 0 };
+          if (!byBuilding[slug]) byBuilding[slug] = { name: fac?.facility_name || slug, total: 0, avoidable: 0, ai_avoidable: 0, readmissions: 0 };
           byBuilding[slug].total++;
           if (r.final_avoidability === 'avoidable') byBuilding[slug].avoidable++;
+          if (r.ai_avoidability === 'avoidable') byBuilding[slug].ai_avoidable++;
           if (r.readmission_flag) byBuilding[slug].readmissions++;
         }
 
         return res.status(200).json({
           total,
-          avoidable,
-          possibly_avoidable: possiblyAvoidable,
-          unavoidable,
           pending,
           readmissions,
-          avoidable_pct: withDetermination.length > 0 ? Math.round((avoidable / withDetermination.length) * 100) : null,
+          final_avoidable: finalAvoidable,
+          final_avoidable_pct: withFinal.length > 0 ? Math.round((finalAvoidable / withFinal.length) * 100) : null,
+          ai_avoidable: aiAvoidable,
+          ai_avoidable_pct: withAI.length > 0 ? Math.round((aiAvoidable / withAI.length) * 100) : null,
           by_category: byCategory,
           by_time_of_day: byTimeOfDay,
           by_month: byMonth,
@@ -131,7 +156,7 @@ export default async function handler(req, res) {
         });
       }
 
-      // Default: list mode
+      // List mode
       let query = supabaseUser
         .from('hospitalization_reviews')
         .select('*')
@@ -165,6 +190,13 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: `Invalid diagnosis category. Must be one of: ${DIAGNOSIS_CATEGORIES.join(', ')}` });
       }
 
+      // PHI check on free-text fields
+      const phiError = checkPHIFields({
+        'Primary Diagnosis': primaryDiagnosis,
+        'Additional Context': additionalContext,
+      });
+      if (phiError) return res.status(422).json({ error: phiError });
+
       // Resolve building
       const { data: fac } = await supabaseUser
         .from('facilities')
@@ -190,59 +222,71 @@ export default async function handler(req, res) {
         buildingContext: buildingCtx,
       });
 
-      // Call Claude for analysis
-      let aiAnalysis = null;
-      let aiAvoidability = null;
+      // Call Claude for structured JSON analysis
+      let aiResult = { classification: null, reasoning: null, root_causes: [], interact_pathway: null, prevention: null, qi_actions: [] };
+      let aiAnalysisText = null;
       try {
         const { default: Anthropic } = await import('@anthropic-ai/sdk');
         const anthropic = new Anthropic();
         const response = await anthropic.messages.create({
           model: 'claude-sonnet-4-20250514',
           max_tokens: 1500,
-          system: `You are a skilled nursing facility clinical analyst specializing in hospitalization avoidability review. You use CMS Potentially Avoidable Hospitalization (PAH) criteria and INTERACT clinical pathways to evaluate cases. You never use patient names or PHI. Your analysis is structured and actionable.
+          system: `You are a skilled nursing facility clinical analyst specializing in hospitalization avoidability review. You use CMS Potentially Avoidable Hospitalization (PAH) criteria and INTERACT clinical pathways.
 
-Always respond with this exact structure:
-CLASSIFICATION: [avoidable / possibly_avoidable / unavoidable]
-REASONING: [2-3 sentences explaining why]
-ROOT CAUSES: [comma-separated list from: staffing, communication, clinical_capability, documentation, physician_response, family_decision, equipment, process_failure, after_hours_coverage]
-INTERACT PATHWAY: [which INTERACT tool/pathway should have been used, if applicable]
-PREVENTION: [specific steps to prevent similar transfers]
-QI ACTIONS: [1-3 concrete quality improvement items]`,
+You MUST respond with valid JSON only — no markdown, no text before or after. Use this exact structure:
+{
+  "classification": "avoidable" | "possibly_avoidable" | "unavoidable",
+  "reasoning": "2-3 sentence explanation",
+  "root_causes": ["staffing", "communication", ...],
+  "interact_pathway": "which INTERACT tool/pathway applies",
+  "prevention": "specific prevention steps",
+  "qi_actions": ["action 1", "action 2", "action 3"]
+}
+
+Valid root_causes: staffing, communication, clinical_capability, documentation, physician_response, family_decision, equipment, process_failure, after_hours_coverage.
+Only include root_causes that genuinely apply — do not pad the list.`,
           messages: [{ role: 'user', content: analysisPrompt }],
         });
 
-        aiAnalysis = response.content[0]?.text || null;
+        const rawText = response.content[0]?.text || '';
+        aiAnalysisText = rawText;
 
-        // Extract classification from structured response
-        const classMatch = aiAnalysis?.match(/CLASSIFICATION:\s*(avoidable|possibly_avoidable|unavoidable)/i);
-        if (classMatch) {
-          aiAvoidability = classMatch[1].toLowerCase();
-        }
+        // Parse JSON from response (handle possible markdown wrapping)
+        const jsonStr = rawText.replace(/^```json\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
+        const parsed = JSON.parse(jsonStr);
+
+        aiResult = {
+          classification: ['avoidable', 'possibly_avoidable', 'unavoidable'].includes(parsed.classification) ? parsed.classification : null,
+          reasoning: parsed.reasoning || null,
+          root_causes: (parsed.root_causes || []).filter(rc => ROOT_CAUSE_OPTIONS.includes(rc)),
+          interact_pathway: parsed.interact_pathway || null,
+          prevention: parsed.prevention || null,
+          qi_actions: Array.isArray(parsed.qi_actions) ? parsed.qi_actions.filter(Boolean) : [],
+        };
       } catch (err) {
         console.warn('[hosp-review] AI analysis failed:', err.message);
-        aiAnalysis = 'AI analysis unavailable — please classify manually.';
+        aiAnalysisText = 'AI analysis unavailable — please classify manually.';
       }
 
-      // Parse root causes from AI response
-      let rootCauses = [];
-      if (aiAnalysis) {
-        const rcMatch = aiAnalysis.match(/ROOT CAUSES:\s*(.+?)(?:\n|$)/i);
-        if (rcMatch) {
-          rootCauses = rcMatch[1].split(',').map(s => s.trim().toLowerCase().replace(/\s+/g, '_'))
-            .filter(s => ROOT_CAUSE_OPTIONS.includes(s));
-        }
+      // PHI check on AI output before storing
+      if (aiAnalysisText && containsPHI(aiAnalysisText)) {
+        aiAnalysisText = '[AI response redacted — contained potential PHI]';
+        aiResult = { classification: null, reasoning: null, root_causes: [], interact_pathway: null, prevention: null, qi_actions: [] };
       }
 
-      // Parse QI actions
-      let qiActions = [];
-      if (aiAnalysis) {
-        const qiMatch = aiAnalysis.match(/QI ACTIONS:\s*(.+?)(?:\n\n|$)/is);
-        if (qiMatch) {
-          qiActions = qiMatch[1].split(/\n|;/).map(s => s.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
-        }
-      }
+      // Build human-readable analysis text
+      const analysisText = aiResult.classification
+        ? [
+            `CLASSIFICATION: ${aiResult.classification}`,
+            `REASONING: ${aiResult.reasoning}`,
+            `ROOT CAUSES: ${aiResult.root_causes.join(', ') || 'none identified'}`,
+            `INTERACT PATHWAY: ${aiResult.interact_pathway || 'N/A'}`,
+            `PREVENTION: ${aiResult.prevention || 'N/A'}`,
+            `QI ACTIONS: ${aiResult.qi_actions.join('; ') || 'none'}`,
+          ].join('\n')
+        : aiAnalysisText;
 
-      // Insert review
+      // Insert review — submitted_by is the user, reviewed_by is null until confirmation
       const { data: review, error } = await supabase
         .from('hospitalization_reviews')
         .insert({
@@ -258,11 +302,13 @@ QI ACTIONS: [1-3 concrete quality improvement items]`,
           interact_tool_used: interactToolUsed ?? null,
           payer_type: payerType || null,
           readmission_flag: readmissionFlag || false,
-          ai_avoidability: aiAvoidability,
-          ai_analysis: aiAnalysis,
-          root_causes: rootCauses,
-          qi_actions: qiActions,
-          reviewed_by: user.id,
+          ai_avoidability: aiResult.classification,
+          ai_analysis: analysisText,
+          root_causes: aiResult.root_causes,
+          qi_actions: aiResult.qi_actions,
+          prevention_notes: aiResult.prevention,
+          submitted_by: user.id,
+          reviewed_by: null,
         })
         .select('review_id')
         .single();
@@ -271,14 +317,17 @@ QI ACTIONS: [1-3 concrete quality improvement items]`,
 
       return res.status(200).json({
         review_id: review.review_id,
-        ai_avoidability: aiAvoidability,
-        ai_analysis: aiAnalysis,
-        root_causes: rootCauses,
-        qi_actions: qiActions,
+        ai_avoidability: aiResult.classification,
+        ai_reasoning: aiResult.reasoning,
+        ai_root_causes: aiResult.root_causes,
+        ai_interact_pathway: aiResult.interact_pathway,
+        ai_prevention: aiResult.prevention,
+        ai_qi_actions: aiResult.qi_actions,
+        ai_analysis: analysisText,
       });
     }
 
-    // ── PATCH: update final determination ──
+    // ── PATCH: confirm or override AI determination ──
     if (req.method === 'PATCH') {
       const { reviewId, finalAvoidability, overrideReason } = req.body || {};
       if (!reviewId || !finalAvoidability) {
@@ -290,11 +339,18 @@ QI ACTIONS: [1-3 concrete quality improvement items]`,
         return res.status(400).json({ error: `finalAvoidability must be one of: ${valid.join(', ')}` });
       }
 
+      // PHI check on override reason
+      if (overrideReason && containsPHI(overrideReason)) {
+        return res.status(422).json({ error: 'Override reason appears to contain PHI. Please remove identifiers.' });
+      }
+
       const { error } = await supabase
         .from('hospitalization_reviews')
         .update({
           final_avoidability: finalAvoidability,
           override_reason: overrideReason || null,
+          reviewed_by: user.id,
+          reviewed_at: new Date().toISOString(),
         })
         .eq('review_id', reviewId);
 
@@ -347,7 +403,7 @@ function buildAnalysisPrompt({
   }
 
   parts.push('');
-  parts.push('Provide your structured analysis using the required format (CLASSIFICATION, REASONING, ROOT CAUSES, INTERACT PATHWAY, PREVENTION, QI ACTIONS).');
+  parts.push('Respond with JSON only.');
 
   return parts.filter(Boolean).join('\n');
 }
