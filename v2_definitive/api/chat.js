@@ -13,7 +13,7 @@
 // This file is the Vercel serverless function: POST /api/chat
 //
 // Data sources:
-//   Production → Supabase (ihcm_bot.v_building_context view, ihcm_bot.workflow_templates)
+//   Production → Supabase (v_bot_building_context view in public schema)
 //   Dev/offline → static fallbacks from src/bots.js, src/buildings.js, src/workflows.js
 // ============================================================================
 
@@ -22,6 +22,7 @@ import { createClient } from '@supabase/supabase-js';
 import { getRoleById } from '../src/bots.js';
 import { getBuildingById, getBuildingProfile } from '../src/buildings.js';
 import { getWorkflowById } from '../src/workflows.js';
+import { getOrCreateBetaUser } from '../../api/lib/betaUser.js';
 
 // ── Configuration ──
 
@@ -289,7 +290,7 @@ async function fetchBuildingContext(buildingSlug) {
 
   try {
     const { data, error } = await supabase
-      .from('ihcm_bot.v_building_context')
+      .from('v_bot_building_context')
       .select('*')
       .eq('slug', buildingSlug)
       .single();
@@ -314,7 +315,7 @@ async function fetchGlobalCore() {
 
   try {
     const { data, error } = await supabase
-      .from('ihcm_bot.global_core')
+      .from('global_core')
       .select('content')
       .eq('is_active', true)
       .order('sort_order', { ascending: true });
@@ -535,7 +536,64 @@ export default async function handler(req, res) {
       // NEVER log message content or API key
     }));
 
-    return res.status(200).json({ reply });
+    // ── Persist conversation server-side (best-effort) ──
+    let conversationId = req.body.conversationId || null;
+    try {
+      if (supabase && userName) {
+        const betaUserId = await getOrCreateBetaUser(supabase, userName, botId);
+        if (betaUserId) {
+          // Resolve building slug to facility UUID for FK
+          let facilityId = null;
+          if (buildingId && buildingId !== 'none') {
+            const { data: fac } = await supabase
+              .from('facilities')
+              .select('facility_id')
+              .eq('facility_code', buildingId)
+              .single();
+            facilityId = fac?.facility_id || null;
+          }
+
+          // Create or reuse conversation
+          if (!conversationId) {
+            const { data: conv } = await supabase
+              .from('conversations')
+              .insert({
+                user_id: betaUserId,
+                facility_id: facilityId,
+                workflow_type: workflowId || null,
+                title: sanitized[0]?.content?.slice(0, 100) || 'New conversation',
+                status: 'active',
+              })
+              .select('conversation_id')
+              .single();
+            conversationId = conv?.conversation_id || null;
+          }
+
+          // Insert user message + assistant reply
+          if (conversationId) {
+            const lastUserMsg = sanitized[sanitized.length - 1];
+            await supabase.from('conversation_messages').insert([
+              {
+                conversation_id: conversationId,
+                role: 'user',
+                content: lastUserMsg.content,
+              },
+              {
+                conversation_id: conversationId,
+                role: 'assistant',
+                content: reply,
+                model_used: MODEL,
+                token_count: response.usage?.output_tokens || null,
+              },
+            ]);
+          }
+        }
+      }
+    } catch (persistErr) {
+      console.warn('[chat] Conversation persistence failed (non-blocking):', persistErr.message);
+    }
+
+    return res.status(200).json({ reply, conversationId });
 
   } catch (err) {
     console.error(JSON.stringify({

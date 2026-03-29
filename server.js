@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
 
-// Load .env.local (no dotenv dependency needed)
+// Load .env.local BEFORE importing handlers (they read process.env at module init)
 try {
   const envFile = readFileSync('.env.local', 'utf8');
   for (const line of envFile.split('\n')) {
@@ -27,9 +27,11 @@ try {
   console.warn('No .env.local found — using existing environment variables');
 }
 
-import chatHandler from './v2_definitive/api/chat.js';
-import parseHandler from './api/parse-2567.js';
-import verifyHandler from './api/verify-access.js';
+// Dynamic imports so env vars are available when modules initialize
+const { default: chatHandler } = await import('./v2_definitive/api/chat.js');
+const { default: parseHandler } = await import('./api/parse-2567.js');
+const { default: verifyHandler } = await import('./api/verify-access.js');
+const { default: feedbackHandler } = await import('./api/feedback.js');
 
 const PORT = 3001;
 
@@ -65,6 +67,15 @@ const server = http.createServer(async (req, res) => {
       for await (const chunk of req) { body += chunk; }
       try { req.body = JSON.parse(body); } catch { req.body = {}; }
       await verifyHandler(req, resAdapter);
+      return;
+    }
+
+    // Route: /api/feedback — feedback collection
+    if (url.pathname === '/api/feedback' && req.method === 'POST') {
+      let body = '';
+      for await (const chunk of req) { body += chunk; }
+      try { req.body = JSON.parse(body); } catch { req.body = {}; }
+      await feedbackHandler(req, resAdapter);
       return;
     }
 

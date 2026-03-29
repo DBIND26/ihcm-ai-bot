@@ -81,7 +81,9 @@ function AccessGate({ onAuthenticated }) {
           return;
         }
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[IHCM] Session recovery failed:', err);
+    }
     setChecking(false);
   }, []);
 
@@ -248,6 +250,10 @@ export default function App() {
 
   // Feedback state: { [messageIndex]: 'useful' | 'not_useful' | 'wrong' }
   const [feedback, setFeedback] = useState({});
+  // Copy-to-clipboard state: tracks which message index was just copied
+  const [copiedMsg, setCopiedMsg] = useState(null);
+  // Server-side conversation ID (from Supabase, returned by /api/chat)
+  const [conversationId, setConversationId] = useState(null);
 
   // State management
   // Default role/building set after login via useEffect below
@@ -266,6 +272,12 @@ export default function App() {
   const [uploadedDocs, setUploadedDocs] = useState([]); // array of parsed citation data
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
+
+  // Welcome guide state — guarded read for privacy-restricted browsers
+  const [seenWelcome, setSeenWelcome] = useState(() => {
+    try { return !!localStorage.getItem('ihcm_seen_welcome'); }
+    catch { return false; }
+  });
 
   // Building history state
   const [showHistory, setShowHistory] = useState(false);
@@ -288,6 +300,7 @@ export default function App() {
     setError(null);
     setActiveWorkflowId(null);
     setWorkflowInputs({});
+    setConversationId(null);
   }, [activeRoleId, activeBuildingId]);
 
   // Load building history when building changes
@@ -394,6 +407,7 @@ export default function App() {
     const newDocs = [];
 
     try {
+      // Parse all files first — don't persist anything until all succeed
       for (const file of pdfFiles) {
         const formData = new FormData();
         formData.append('file', file);
@@ -415,18 +429,19 @@ export default function App() {
 
         data._fileName = file.name;
         newDocs.push(data);
-
-        // Auto-save to building history if a building is selected
-        if (activeBuildingId && activeBuildingId !== 'none') {
-          addSurvey(activeBuildingId, data);
-        }
       }
 
-      setUploadedDocs(prev => [...prev, ...newDocs]);
-
+      // All files parsed successfully — now persist to history in one batch
       if (activeBuildingId && activeBuildingId !== 'none') {
+        for (const doc of newDocs) {
+          addSurvey(activeBuildingId, doc);
+        }
         setHistoryData(getBuildingHistory(activeBuildingId));
       }
+
+      // Update state with all new docs at once
+      const allDocs = [...uploadedDocs, ...newDocs];
+      setUploadedDocs(allDocs);
 
       // Build summary of ALL newly uploaded docs
       const allCitations = newDocs.flatMap(d => d.citations || []);
@@ -445,7 +460,9 @@ export default function App() {
 
       const uploadMessage = `I uploaded ${newDocs.length} survey(s):\n${surveyList}\n\nTotal ${allCitations.length} citation(s):\n${tagSummary}${criticalNote}\n\nPlease review these citations and give me specific POC guidance for each, prioritized by severity. The full findings text is available in your context.`;
 
-      await sendMessage(uploadMessage);
+      // Pass document context directly — don't rely on stale uploadedDocs state
+      const freshDocumentContext = buildDocumentContext(allDocs);
+      await sendMessage(uploadMessage, { overrideDocumentContext: freshDocumentContext });
 
     } catch (err) {
       setUploadError(err.message || 'Failed to parse PDF');
@@ -469,15 +486,15 @@ export default function App() {
     setShowAddEvent(false);
   };
 
-  // Build document context string for the API — combines ALL uploaded docs
-  const getDocumentContextForApi = () => {
-    if (!uploadedDocs.length) return null;
-    const allCitations = uploadedDocs.flatMap(d => d.citations || []);
+  // Build document context string for the API — combines given docs array
+  const buildDocumentContext = (docs) => {
+    if (!docs || !docs.length) return null;
+    const allCitations = docs.flatMap(d => d.citations || []);
     if (allCitations.length === 0) return null;
 
     const parts = [];
 
-    for (const doc of uploadedDocs) {
+    for (const doc of docs) {
       parts.push(`=== SURVEY: ${doc.facility_name || doc._fileName || 'Unknown'} | Date: ${doc.survey_date || 'Unknown'} | Type: ${doc.survey_type || 'standard'} ===`);
       parts.push(`Total Citations: ${doc.total_citations || 0}`);
       if (doc.critical_tags?.length) {
@@ -499,8 +516,9 @@ export default function App() {
     return parts.join('\n');
   };
 
-  // Send message
-  const sendMessage = async (messageContent = null) => {
+  // Send message. Optional overrideDocumentContext bypasses stale uploadedDocs state
+  // (used by handleFileUpload which has the freshly-parsed docs in hand).
+  const sendMessage = async (messageContent = null, { overrideDocumentContext } = {}) => {
     const content = messageContent || inputText.trim();
 
     if (!content || isLoading) return;
@@ -515,8 +533,10 @@ export default function App() {
     setInputText('');
 
     try {
-      // Build extra context
-      const documentContext = getDocumentContextForApi();
+      // Build extra context — use override if provided (avoids stale state after setUploadedDocs)
+      const documentContext = overrideDocumentContext !== undefined
+        ? overrideDocumentContext
+        : buildDocumentContext(uploadedDocs);
       const historyContext = (activeBuildingId && activeBuildingId !== 'none')
         ? getBuildingHistoryContext(activeBuildingId)
         : null;
@@ -533,12 +553,15 @@ export default function App() {
           workflowId: activeWorkflowId || null,
           documentContext: documentContext || undefined,
           historyContext: historyContext || undefined,
-          userName: userName || undefined,
+          userName: userSession?.userName || undefined,
+          conversationId: conversationId || undefined,
         })
       });
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`);
+        const err = new Error(`API error: ${response.status} ${response.statusText}`);
+        err.status = response.status;
+        throw err;
       }
 
       const data = await response.json();
@@ -555,10 +578,31 @@ export default function App() {
       // Save to storage
       saveMessages(activeRoleId, activeBuildingId, finalMessages);
 
+      // Track server-side conversation ID
+      if (data.conversationId) {
+        setConversationId(data.conversationId);
+      }
+
       setActiveWorkflowId(null);
       setWorkflowInputs({});
     } catch (err) {
-      setError(err.message || 'An error occurred while sending your message.');
+      // Provide specific error messages based on failure type
+      let errorMsg = 'An error occurred while sending your message.';
+      if (err.name === 'AbortError' || err.message?.includes('timeout')) {
+        errorMsg = 'Request took too long — try a shorter message.';
+      } else if (err.message?.includes('429') || err.status === 429) {
+        errorMsg = 'Too many requests — please wait a moment and try again.';
+      } else if (err.message?.includes('500') || err.message?.includes('502') || err.message?.includes('503')) {
+        errorMsg = 'Server error — please try again in a moment.';
+      } else if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')) {
+        errorMsg = 'Connection error — check your internet and try again.';
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+      setError(errorMsg);
+      // Clear workflow state on error so it doesn't re-submit
+      setActiveWorkflowId(null);
+      setWorkflowInputs({});
     } finally {
       setIsLoading(false);
     }
@@ -577,31 +621,127 @@ export default function App() {
     setActiveWorkflowId(null);
     setWorkflowInputs({});
     setFeedback({});
+    setConversationId(null);
   };
 
   // Handle feedback on a message
   const handleFeedback = (msgIndex, type) => {
     setFeedback(prev => ({ ...prev, [msgIndex]: type }));
-    // Store feedback in localStorage for later review
+
+    const feedbackData = {
+      type,
+      user: userSession?.userName,
+      role: activeRoleId,
+      building: activeBuildingId,
+      messagePreview: messages[msgIndex]?.content?.slice(0, 100),
+      userQuestion: messages[msgIndex - 1]?.content?.slice(0, 100),
+      timestamp: new Date().toISOString(),
+    };
+
+    // Store in localStorage as backup
     try {
       const feedbackLog = JSON.parse(localStorage.getItem('ihcm_feedback') || '[]');
-      feedbackLog.push({
-        type,
-        user: userName,
-        role: activeRoleId,
-        building: activeBuildingId,
-        messageIndex: msgIndex,
-        messagePreview: messages[msgIndex]?.content?.slice(0, 100),
-        userQuestion: messages[msgIndex - 1]?.content?.slice(0, 100),
-        timestamp: new Date().toISOString(),
-      });
+      feedbackLog.push({ ...feedbackData, messageIndex: msgIndex });
       localStorage.setItem('ihcm_feedback', JSON.stringify(feedbackLog));
-    } catch {}
+    } catch (err) {
+      console.warn('[IHCM] Failed to save feedback to localStorage:', err);
+    }
+
+    // POST to feedback API (fire-and-forget, don't block UI)
+    fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...feedbackData, conversationId: conversationId || undefined }),
+    }).catch(err => {
+      console.warn('[IHCM] Failed to send feedback to API:', err);
+    });
   };
 
-  // Format markdown-like content
+  // Copy message content to clipboard
+  const handleCopy = async (msgIndex, content) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMsg(msgIndex);
+      setTimeout(() => setCopiedMsg(null), 2000);
+    } catch (err) {
+      console.warn('[IHCM] Copy to clipboard failed:', err);
+    }
+  };
+
+  // Format inline markdown (bold, links)
+  const formatInline = (text, lineKey) => {
+    // Process bold and links in one pass
+    const parts = [];
+    let remaining = text;
+    let partIdx = 0;
+
+    while (remaining.length > 0) {
+      // Find the next bold or link
+      const boldMatch = remaining.match(/\*\*([^*]+)\*\*/);
+      const linkMatch = remaining.match(/\[([^\]]+)\]\(([^)]+)\)/);
+
+      let nextMatch = null;
+      let nextType = null;
+
+      if (boldMatch && (!linkMatch || boldMatch.index <= linkMatch.index)) {
+        nextMatch = boldMatch;
+        nextType = 'bold';
+      } else if (linkMatch) {
+        nextMatch = linkMatch;
+        nextType = 'link';
+      }
+
+      if (!nextMatch) {
+        parts.push(remaining);
+        break;
+      }
+
+      // Text before the match
+      if (nextMatch.index > 0) {
+        parts.push(remaining.slice(0, nextMatch.index));
+      }
+
+      if (nextType === 'bold') {
+        parts.push(<strong key={`${lineKey}-b${partIdx++}`}>{nextMatch[1]}</strong>);
+      } else if (nextType === 'link') {
+        const href = nextMatch[2];
+        // Only allow safe protocols — reject javascript:, data:, vbscript:, etc.
+        const isSafe = /^https?:\/\//i.test(href) || href.startsWith('/') || href.startsWith('#');
+        if (isSafe) {
+          parts.push(
+            <a key={`${lineKey}-a${partIdx++}`} href={href} target="_blank" rel="noopener noreferrer"
+              style={{ color: '#2563eb', textDecoration: 'underline' }}>
+              {nextMatch[1]}
+            </a>
+          );
+        } else {
+          // Render as plain text if URL is unsafe
+          parts.push(nextMatch[1]);
+        }
+      }
+
+      remaining = remaining.slice(nextMatch.index + nextMatch[0].length);
+    }
+
+    return parts.length === 1 && typeof parts[0] === 'string' ? parts[0] : parts;
+  };
+
+  // Classify a line as 'ul', 'ol', or null (not a list item)
+  const getListType = (line) => {
+    if (/^\s*\d+[\.\)]\s/.test(line)) return 'ol';
+    if (line.trim().startsWith('-') || line.trim().startsWith('* ')) return 'ul';
+    return null;
+  };
+
+  // Extract text content from a list item line
+  const getListItemText = (line, type) => {
+    if (type === 'ol') return line.replace(/^\s*\d+[\.\)]\s/, '');
+    if (line.trim().startsWith('-')) return line.replace(/^\s*-\s*/, '');
+    return line.replace(/^\s*\*\s/, '');
+  };
+
+  // Format markdown-like content — groups consecutive list items into <ul>/<ol>
   const formatContent = (content) => {
-    // Split by lines and process
     const lines = content.split('\n');
     const result = [];
     let i = 0;
@@ -609,41 +749,66 @@ export default function App() {
     while (i < lines.length) {
       const line = lines[i];
 
+      // Code blocks (```)
+      if (line.trim().startsWith('```')) {
+        const codeLines = [];
+        i++;
+        while (i < lines.length && !lines[i].trim().startsWith('```')) {
+          codeLines.push(lines[i]);
+          i++;
+        }
+        result.push(
+          <pre key={`code-${i}`} style={{
+            backgroundColor: '#1f2937', color: '#e5e7eb', padding: '12px 16px',
+            borderRadius: '6px', fontSize: '13px', overflowX: 'auto',
+            fontFamily: 'monospace', margin: '8px 0', lineHeight: '1.5',
+          }}>
+            <code>{codeLines.join('\n')}</code>
+          </pre>
+        );
+        i++; // skip closing ```
+        continue;
+      }
+
       // Headers (##)
       if (line.startsWith('##')) {
         result.push(
           <h3 key={`h3-${i}`} className="ihcm-message-header">
-            {line.replace(/^##\s*/, '')}
+            {formatInline(line.replace(/^##\s*/, ''), `h3-${i}`)}
           </h3>
         );
         i++;
         continue;
       }
 
-      // Bold text (**)
-      const boldRegex = /\*\*([^*]+)\*\*/g;
-      const boldLine = line.split(boldRegex).map((part, idx) => {
-        if (idx % 2 === 1) {
-          return <strong key={`bold-${i}-${idx}`}>{part}</strong>;
+      // Collect consecutive list items into a proper <ul> or <ol>
+      const listType = getListType(line);
+      if (listType) {
+        const items = [];
+        const startIdx = i;
+        while (i < lines.length && getListType(lines[i]) === listType) {
+          items.push(
+            <li key={`li-${i}`} className="ihcm-message-bullet">
+              {formatInline(getListItemText(lines[i], listType), `li-${i}`)}
+            </li>
+          );
+          i++;
         }
-        return part;
-      });
-
-      // Bullet points (-)
-      if (line.trim().startsWith('-')) {
+        const ListTag = listType === 'ol' ? 'ol' : 'ul';
         result.push(
-          <li key={`li-${i}`} className="ihcm-message-bullet">
-            {boldLine}
-          </li>
+          <ListTag key={`${listType}-${startIdx}`} style={{ margin: '4px 0', paddingLeft: '24px' }}>
+            {items}
+          </ListTag>
         );
-      } else if (line.trim() === '') {
-        // Empty line
+        continue;
+      }
+
+      if (line.trim() === '') {
         result.push(<div key={`empty-${i}`} className="ihcm-message-spacing" />);
       } else {
-        // Regular paragraph
         result.push(
           <p key={`p-${i}`} className="ihcm-message-text">
-            {boldLine}
+            {formatInline(line, `line-${i}`)}
           </p>
         );
       }
@@ -894,6 +1059,7 @@ export default function App() {
         <div style={{ marginLeft: 'auto' }}>
           <button
             onClick={() => {
+              if (messages.length > 0 && !window.confirm('Start a new chat? Current conversation will be cleared.')) return;
               handleClearConversation();
               setUploadedDocs([]);
             }}
@@ -1266,7 +1432,7 @@ export default function App() {
             </p>
 
             {/* Welcome guide — shows tips for new users */}
-            {!localStorage.getItem('ihcm_seen_welcome') ? (
+            {!seenWelcome ? (
               <div style={{ textAlign: 'left', fontSize: '14px', lineHeight: '1.6', color: '#4b5563' }}>
                 <p style={{ margin: '0 0 10px 0' }}>Welcome to the IHCM AI Bot! Here's how to get started:</p>
                 <p style={{ margin: '0 0 6px 0' }}><strong>Role tabs</strong> — Switch between DON, MDS, Billing, Admin, and Regional views at the top. Each has specialized knowledge.</p>
@@ -1275,7 +1441,7 @@ export default function App() {
                 <p style={{ margin: '0 0 6px 0' }}><strong>Draft Mode</strong> — Toggle this on to have the bot write formal documents (POC responses, appeal letters, policy drafts).</p>
                 <p style={{ margin: '0 0 12px 0' }}><strong>+ New Chat</strong> — Start a fresh conversation anytime. Your history is saved per role and building.</p>
                 <button
-                  onClick={() => { try { localStorage.setItem('ihcm_seen_welcome', '1'); } catch {} }}
+                  onClick={() => { setSeenWelcome(true); try { localStorage.setItem('ihcm_seen_welcome', '1'); } catch (err) { console.warn('[IHCM] Failed to save welcome flag:', err); } }}
                   style={{
                     padding: '6px 14px', borderRadius: '6px', border: '1px solid #d1d5db',
                     backgroundColor: 'white', cursor: 'pointer', fontSize: '13px', color: '#6b7280'
@@ -1334,11 +1500,11 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                {/* Feedback buttons for assistant messages */}
+                {/* Feedback & copy buttons for assistant messages */}
                 {msg.role === 'assistant' && (
                   <div style={{
                     display: 'flex', gap: '6px', marginTop: '8px', paddingTop: '6px',
-                    borderTop: '1px solid rgba(0,0,0,0.06)'
+                    borderTop: '1px solid rgba(0,0,0,0.06)', alignItems: 'center'
                   }}>
                     {[
                       { type: 'useful', label: 'Useful', icon: '\u2191' },
@@ -1359,6 +1525,18 @@ export default function App() {
                         {fb.icon} {fb.label}
                       </button>
                     ))}
+                    <button
+                      onClick={() => handleCopy(idx, msg.content)}
+                      style={{
+                        padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
+                        border: '1px solid #d1d5db',
+                        backgroundColor: copiedMsg === idx ? '#dcfce7' : 'transparent',
+                        color: copiedMsg === idx ? '#166534' : '#9ca3af',
+                        cursor: 'pointer', fontWeight: '500', marginLeft: 'auto',
+                      }}
+                    >
+                      {copiedMsg === idx ? 'Copied!' : 'Copy'}
+                    </button>
                   </div>
                 )}
               </div>

@@ -4,7 +4,10 @@
 // Checks the shared beta password. The password is stored server-side as
 // BETA_ACCESS_CODE in Vercel environment variables — never sent to the client.
 //
-// If BETA_ACCESS_CODE is not set, access is open (dev mode).
+// If BETA_ACCESS_CODE is not set, access is rejected (no open access).
+// On success, creates/resolves a beta_users row and returns the betaUserId.
+
+import { getOrCreateBetaUser } from './lib/betaUser.js';
 
 export default async function handler(req, res) {
   // CORS
@@ -44,5 +47,17 @@ export default async function handler(req, res) {
     timestamp: new Date().toISOString(),
   }));
 
-  return res.status(200).json({ valid: true });
+  // Create/resolve beta user if Supabase is configured
+  let betaUserId = null;
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY && name) {
+    try {
+      const { createClient } = await import('@supabase/supabase-js');
+      const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+      betaUserId = await getOrCreateBetaUser(supabase, name);
+    } catch (err) {
+      console.warn('[verify-access] Beta user creation failed:', err.message);
+    }
+  }
+
+  return res.status(200).json({ valid: true, betaUserId });
 }
