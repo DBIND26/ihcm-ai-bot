@@ -32,6 +32,7 @@ const { default: chatHandler } = await import('./v2_definitive/api/chat.js');
 const { default: parseHandler } = await import('./api/parse-2567.js');
 const { default: verifyHandler } = await import('./api/verify-access.js');
 const { default: feedbackHandler } = await import('./api/feedback.js');
+const { default: conversationsHandler } = await import('./api/conversations.js');
 
 const PORT = 3001;
 
@@ -76,6 +77,13 @@ const server = http.createServer(async (req, res) => {
       for await (const chunk of req) { body += chunk; }
       try { req.body = JSON.parse(body); } catch { req.body = {}; }
       await feedbackHandler(req, resAdapter);
+      return;
+    }
+
+    // Route: /api/conversations — list/load conversations
+    if (url.pathname === '/api/conversations' && req.method === 'GET') {
+      req.url = url.pathname + url.search; // preserve query string
+      await conversationsHandler(req, resAdapter);
       return;
     }
 

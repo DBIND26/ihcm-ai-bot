@@ -254,6 +254,10 @@ export default function App() {
   const [copiedMsg, setCopiedMsg] = useState(null);
   // Server-side conversation ID (from Supabase, returned by /api/chat)
   const [conversationId, setConversationId] = useState(null);
+  // Conversation list from server (for history sidebar)
+  const [conversationList, setConversationList] = useState([]);
+  const [showConversations, setShowConversations] = useState(false);
+  const [loadingConversations, setLoadingConversations] = useState(false);
 
   // State management
   // Default role/building set after login via useEffect below
@@ -293,15 +297,54 @@ export default function App() {
   const activeRole = getRoleById(activeRoleId);
   const activeBuildings = getActiveBuildings();
 
-  // Load messages when role or building changes
+  // Load most recent conversation when role or building changes
   useEffect(() => {
-    const savedMessages = loadMessages(activeRoleId, activeBuildingId);
-    setMessages(savedMessages || []);
     setError(null);
     setActiveWorkflowId(null);
     setWorkflowInputs({});
     setConversationId(null);
-  }, [activeRoleId, activeBuildingId]);
+
+    // Try server first, fall back to localStorage
+    const loadFromServer = async () => {
+      if (!userSession?.userName) return false;
+      try {
+        const params = new URLSearchParams({ user: userSession.userName });
+        if (activeBuildingId && activeBuildingId !== 'none') {
+          params.set('building', activeBuildingId);
+        }
+        const res = await fetch(`/api/conversations?${params}`);
+        if (!res.ok) return false;
+        const data = await res.json();
+        setConversationList(data.conversations || []);
+
+        // Auto-load the most recent conversation
+        if (data.conversations?.length > 0) {
+          const latest = data.conversations[0];
+          const msgRes = await fetch(`/api/conversations?id=${latest.conversation_id}`);
+          if (msgRes.ok) {
+            const msgData = await msgRes.json();
+            if (msgData.messages?.length > 0) {
+              setMessages(msgData.messages);
+              setConversationId(latest.conversation_id);
+              return true;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[IHCM] Server conversation load failed, using localStorage:', err);
+      }
+      return false;
+    };
+
+    loadFromServer().then(loaded => {
+      if (!loaded) {
+        // Fall back to localStorage
+        const savedMessages = loadMessages(activeRoleId, activeBuildingId);
+        setMessages(savedMessages || []);
+        setConversationList([]);
+      }
+    });
+  }, [activeRoleId, activeBuildingId, userSession]);
 
   // Load building history when building changes
   useEffect(() => {
@@ -622,6 +665,43 @@ export default function App() {
     setWorkflowInputs({});
     setFeedback({});
     setConversationId(null);
+  };
+
+  // Load a specific conversation from server
+  const handleLoadConversation = async (conv) => {
+    try {
+      const res = await fetch(`/api/conversations?id=${conv.conversation_id}`);
+      if (!res.ok) throw new Error('Failed to load');
+      const data = await res.json();
+      setMessages(data.messages || []);
+      setConversationId(conv.conversation_id);
+      setFeedback({});
+      setShowConversations(false);
+    } catch (err) {
+      console.warn('[IHCM] Failed to load conversation:', err);
+      setError('Failed to load conversation from server.');
+    }
+  };
+
+  // Refresh conversation list from server
+  const refreshConversationList = async () => {
+    if (!userSession?.userName) return;
+    setLoadingConversations(true);
+    try {
+      const params = new URLSearchParams({ user: userSession.userName });
+      if (activeBuildingId && activeBuildingId !== 'none') {
+        params.set('building', activeBuildingId);
+      }
+      const res = await fetch(`/api/conversations?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        setConversationList(data.conversations || []);
+      }
+    } catch (err) {
+      console.warn('[IHCM] Failed to refresh conversation list:', err);
+    } finally {
+      setLoadingConversations(false);
+    }
   };
 
   // Handle feedback on a message
@@ -1055,8 +1135,24 @@ export default function App() {
           </button>
         )}
 
-        {/* New Chat button — pushed to the right */}
-        <div style={{ marginLeft: 'auto' }}>
+        {/* Chat History & New Chat — pushed to the right */}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+          <button
+            onClick={() => { refreshConversationList(); setShowConversations(!showConversations); }}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '6px',
+              border: '1px solid #d1d5db',
+              backgroundColor: showConversations ? '#dbeafe' : '#f3f4f6',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '500',
+              color: showConversations ? '#1e40af' : '#6b7280',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            Chat History {conversationList.length > 0 ? `(${conversationList.length})` : ''}
+          </button>
           <button
             onClick={() => {
               if (messages.length > 0 && !window.confirm('Start a new chat? Current conversation will be cleared.')) return;
@@ -1079,6 +1175,58 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {/* Conversation History Panel */}
+      {showConversations && (
+        <div style={{
+          padding: '16px 24px',
+          backgroundColor: '#f8fafc',
+          borderBottom: '1px solid #e5e7eb',
+          maxHeight: '250px',
+          overflowY: 'auto'
+        }}>
+          <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '600', color: '#1f2937' }}>
+            Recent Conversations
+          </h3>
+          {loadingConversations ? (
+            <p style={{ color: '#9ca3af', fontSize: '13px', margin: 0 }}>Loading...</p>
+          ) : conversationList.length === 0 ? (
+            <p style={{ color: '#9ca3af', fontSize: '13px', margin: 0 }}>
+              No saved conversations yet. Start chatting and your history will appear here.
+            </p>
+          ) : (
+            conversationList.map(conv => (
+              <button
+                key={conv.conversation_id}
+                onClick={() => handleLoadConversation(conv)}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  marginBottom: '6px',
+                  borderRadius: '6px',
+                  border: conversationId === conv.conversation_id ? '2px solid #2563eb' : '1px solid #e5e7eb',
+                  backgroundColor: conversationId === conv.conversation_id ? '#eff6ff' : 'white',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  fontFamily: 'inherit',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <strong style={{ color: '#1f2937' }}>{conv.title || 'Untitled'}</strong>
+                  <span style={{ color: '#9ca3af', fontSize: '11px' }}>
+                    {conv.message_count} msg{conv.message_count !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div style={{ color: '#6b7280', fontSize: '12px', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {conv.last_message || '...'}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      )}
 
       {/* Upload error */}
       {uploadError && (
