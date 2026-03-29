@@ -3,7 +3,7 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "functions": {
-    "v2_definitive/api/chat.js": {
+    "api/chat.js": {
       "maxDuration": 30
     },
     "api/parse-2567.js": {
@@ -11,8 +11,7 @@
     }
   },
   "rewrites": [
-    { "source": "/api/chat", "destination": "/v2_definitive/api/chat" },
-    { "source": "/api/parse-2567", "destination": "/api/parse-2567" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/api/chat", "destination": "/api/chat" },
+    { "source": "/api/parse-2567", "destination": "/api/parse-2567" }
   ]
 }
