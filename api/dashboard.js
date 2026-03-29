@@ -18,11 +18,11 @@ export default async function handler(req, res) {
 
   const auth = await requireAuth(req);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
-  const { supabase } = auth;
+  const { supabase, supabaseUser } = auth;
 
   try {
     // Get all buildings with context
-    const { data: buildings, error: bErr } = await supabase
+    const { data: buildings, error: bErr } = await supabaseUser
       .from('v_bot_building_context')
       .select('slug, label, state, bed_capacity, census, occupancy_gap, strategic_status, composite_score, risk_label, skilled_mix_pct, medicaid_pct, payer_context, survey_context, staffing_context, reimbursement_context, risk_watchlist, strategic_notes, market_summary, referral_summary, growth_barriers, growth_opportunities')
       .order('composite_score', { ascending: false, nullsFirst: false });
@@ -33,14 +33,14 @@ export default async function handler(req, res) {
     }
 
     // Get open alerts per facility
-    const { data: alerts, error: aErr } = await supabase
+    const { data: alerts, error: aErr } = await supabaseUser
       .from('ai_alerts')
       .select('facility_id, alert_id, alert_category, alert_type, severity, title, description, recommended_action, owner_role, status, alert_date')
       .in('status', ['open', 'acknowledged', 'in_progress'])
       .order('alert_date', { ascending: false });
 
     // Get facility code → id mapping for alert matching
-    const { data: facilities } = await supabase
+    const { data: facilities } = await supabaseUser
       .from('facilities')
       .select('facility_id, facility_code');
 

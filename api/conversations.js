@@ -24,7 +24,7 @@ export default async function handler(req, res) {
   // Auth check
   const auth = await requireAuth(req);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
-  const { user, supabase } = auth;
+  const { user, supabase, supabaseUser } = auth;
   const userId = user.id;
 
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -75,7 +75,7 @@ export default async function handler(req, res) {
     // ── Detail mode: load a specific conversation's messages ──
     if (conversationId) {
       // Verify ownership
-      const { data: conv, error: convError } = await supabase
+      const { data: conv, error: convError } = await supabaseUser
         .from('conversations')
         .select('conversation_id')
         .eq('conversation_id', conversationId)
@@ -86,7 +86,7 @@ export default async function handler(req, res) {
         return res.status(403).json({ error: 'Conversation not found or access denied' });
       }
 
-      const { data: messages, error } = await supabase
+      const { data: messages, error } = await supabaseUser
         .from('conversation_messages')
         .select('role, content, created_at')
         .eq('conversation_id', conversationId)
@@ -107,7 +107,7 @@ export default async function handler(req, res) {
     // Resolve building slug to facility UUID
     let facilityId = null;
     if (buildingId && buildingId !== 'none') {
-      const { data: fac } = await supabase
+      const { data: fac } = await supabaseUser
         .from('facilities')
         .select('facility_id')
         .eq('facility_code', buildingId)
@@ -115,7 +115,7 @@ export default async function handler(req, res) {
       facilityId = fac?.facility_id || null;
     }
 
-    let query = supabase
+    let query = supabaseUser
       .from('conversations')
       .select('conversation_id, title, facility_id, workflow_type, bot_id, status, updated_at, created_at')
       .eq('user_id', userId)
@@ -135,7 +135,7 @@ export default async function handler(req, res) {
 
     // Get message counts and last message preview
     const enriched = await Promise.all((conversations || []).map(async (conv) => {
-      const { data: msgs } = await supabase
+      const { data: msgs } = await supabaseUser
         .from('conversation_messages')
         .select('role, content')
         .eq('conversation_id', conv.conversation_id)
@@ -143,7 +143,7 @@ export default async function handler(req, res) {
         .limit(1);
 
       const lastMsg = msgs?.[0];
-      const { count } = await supabase
+      const { count } = await supabaseUser
         .from('conversation_messages')
         .select('*', { count: 'exact', head: true })
         .eq('conversation_id', conv.conversation_id);

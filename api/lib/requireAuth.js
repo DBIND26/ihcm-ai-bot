@@ -17,10 +17,13 @@ export async function requireAuth(req) {
 
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  const anonKey = process.env.VITE_SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) return null;
 
   try {
     const { createClient } = await import('@supabase/supabase-js');
+
+    // Service-role client for admin writes (bypasses RLS)
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     // Verify the JWT and get the user
@@ -36,10 +39,20 @@ export async function requireAuth(req) {
 
     if (!profile?.is_active) return null;
 
+    // RLS-enforced client using anon key + user JWT
+    // Database RLS policies (role, domain, facility checks) are enforced on this client
+    let supabaseUser = supabase; // fallback to service if no anon key
+    if (anonKey) {
+      supabaseUser = createClient(supabaseUrl, anonKey, {
+        global: { headers: { Authorization: `Bearer ${token}` } },
+      });
+    }
+
     return {
-      user,       // { id, email, ... }
-      profile,    // { app_role, global_access_level, full_name, allowed_bot_roles }
-      supabase,   // authenticated service client for downstream queries
+      user,           // { id, email, ... }
+      profile,        // { app_role, global_access_level, full_name, allowed_bot_roles }
+      supabase,       // service-role client (bypasses RLS) — use for admin writes
+      supabaseUser,   // RLS-enforced client — use for user-scoped reads
     };
   } catch (err) {
     console.warn('[requireAuth] JWT verification failed:', err.message);

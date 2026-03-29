@@ -2,8 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import { getRoleById, getRoleIds } from '../v2_definitive/src/bots.js';
 import { getActiveBuildings } from '../v2_definitive/src/buildings.js';
 import { WORKFLOWS, getWorkflowsForRole } from '../v2_definitive/src/workflows.js';
-import { loadMessages, saveMessages, clearMessages } from './storage.js';
-import { addSurvey, addEvent, getBuildingHistoryContext, getBuildingHistory } from './buildingHistory.js';
 import AccessGate from './components/AccessGate.jsx';
 import MessageList from './components/MessageList.jsx';
 import BuildingHistoryPanel from './components/BuildingHistoryPanel.jsx';
@@ -146,9 +144,7 @@ export default function App() {
 
     loadFromServer().then(loaded => {
       if (!loaded) {
-        // Fall back to localStorage
-        const savedMessages = loadMessages(activeRoleId, activeBuildingId);
-        setMessages(savedMessages || []);
+        setMessages([]);
         setConversationList([]);
       }
     });
@@ -173,11 +169,10 @@ export default function App() {
           const data = await res.json();
           setHistoryData(data);
         } else {
-          // Fall back to localStorage
-          setHistoryData(getBuildingHistory(activeBuildingId));
+          setHistoryData({ surveys: [], events: [] });
         }
       } catch {
-        setHistoryData(getBuildingHistory(activeBuildingId));
+        setHistoryData({ surveys: [], events: [] });
       }
     };
     loadHistory();
@@ -315,17 +310,12 @@ export default function App() {
               }),
             });
           } catch { /* non-blocking */ }
-          // Also keep localStorage as fallback
-          addSurvey(activeBuildingId, doc);
         }
         // Reload from server
         try {
           const histRes = await fetch(`/api/building-history?building=${activeBuildingId}`, { headers: authHeaders() });
           if (histRes.ok) setHistoryData(await histRes.json());
-          else setHistoryData(getBuildingHistory(activeBuildingId));
-        } catch {
-          setHistoryData(getBuildingHistory(activeBuildingId));
-        }
+        } catch { /* non-blocking */ }
       }
 
       // Update state with all new docs at once
@@ -552,9 +542,25 @@ export default function App() {
       const documentContext = overrideDocumentContext !== undefined
         ? overrideDocumentContext
         : buildDocumentContext(uploadedDocs);
-      const historyContext = (activeBuildingId && activeBuildingId !== 'none')
-        ? getBuildingHistoryContext(activeBuildingId)
-        : null;
+      // Build history context from server-loaded historyData state
+      let historyContext = null;
+      if (activeBuildingId && activeBuildingId !== 'none' && historyData) {
+        const parts = [];
+        if (historyData.surveys?.length > 0) {
+          parts.push(`SURVEY HISTORY (${historyData.surveys.length} survey${historyData.surveys.length > 1 ? 's' : ''}):`);
+          for (const s of historyData.surveys.slice(0, 5)) {
+            const tags = (s.citations || []).map(c => c.fTag).join(', ');
+            parts.push(`- ${s.date} ${s.type} survey: ${s.totalTags || 0} citation(s) [${tags}]`);
+          }
+        }
+        if (historyData.events?.length > 0) {
+          parts.push(`\nOPERATIONAL EVENTS (${historyData.events.length}):`);
+          for (const e of historyData.events.slice(0, 10)) {
+            parts.push(`- ${e.date} [${e.category}] ${e.title}: ${e.description || ''}`);
+          }
+        }
+        if (parts.length > 0) historyContext = 'BUILDING HISTORY\n' + parts.join('\n');
+      }
 
       // Call API
       const response = await fetch('/api/chat', {
@@ -588,9 +594,6 @@ export default function App() {
       const assistantMessage = { role: 'assistant', content: data.reply };
       const finalMessages = [...updatedMessages, assistantMessage];
       setMessages(finalMessages);
-
-      // Save to storage
-      saveMessages(activeRoleId, activeBuildingId, finalMessages);
 
       // Track server-side conversation ID
       if (data.conversationId) {
@@ -629,7 +632,6 @@ export default function App() {
 
   // Clear conversation
   const handleClearConversation = () => {
-    clearMessages(activeRoleId, activeBuildingId);
     setMessages([]);
     setError(null);
     setActiveWorkflowId(null);
@@ -1088,9 +1090,7 @@ export default function App() {
                 if (histRes.ok) setHistoryData(await histRes.json());
               }
             } catch {
-              // Fallback to localStorage
-              addEvent(activeBuildingId, eventData);
-              setHistoryData(getBuildingHistory(activeBuildingId));
+              console.warn('[IHCM] Failed to save event');
             }
           }}
         />

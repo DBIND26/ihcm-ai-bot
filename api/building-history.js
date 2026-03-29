@@ -56,7 +56,7 @@ export default async function handler(req, res) {
 
   const auth = await requireAuth(req);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
-  const { user, supabase } = auth;
+  const { user, supabase, supabaseUser } = auth;
 
   // ── GET: load building history ──
   if (req.method === 'GET') {
@@ -65,7 +65,7 @@ export default async function handler(req, res) {
     if (!buildingId) return res.status(400).json({ error: 'Missing building parameter' });
 
     // Resolve slug to facility_id
-    const { data: fac } = await supabase
+    const { data: fac } = await supabaseUser
       .from('facilities')
       .select('facility_id')
       .eq('facility_code', buildingId)
@@ -73,7 +73,7 @@ export default async function handler(req, res) {
     if (!fac) return res.status(404).json({ error: 'Building not found' });
 
     // Fetch surveys
-    const { data: surveys } = await supabase
+    const { data: surveys } = await supabaseUser
       .from('building_surveys')
       .select('survey_id, survey_date, survey_type, source, total_deficiencies, scope_severity_max, has_immediate_jeopardy, deficiencies')
       .eq('facility_id', fac.facility_id)
@@ -81,7 +81,7 @@ export default async function handler(req, res) {
       .limit(20);
 
     // Fetch events
-    const { data: events } = await supabase
+    const { data: events } = await supabaseUser
       .from('building_events')
       .select('event_id, event_date, category, title, description')
       .eq('facility_id', fac.facility_id)

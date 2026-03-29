@@ -27,7 +27,7 @@ export default async function handler(req, res) {
   // Auth check
   const auth = await requireAuth(req);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
-  const { user: authUser, supabase } = auth;
+  const { user: authUser, supabase, supabaseUser } = auth;
 
   // ── GET: list knowledge sources ──
   if (req.method === 'GET') {
@@ -36,7 +36,7 @@ export default async function handler(req, res) {
     const stateCode = url.searchParams.get('state');
     const statusFilter = url.searchParams.get('status'); // 'draft', 'approved', 'all'
 
-    let query = supabase
+    let query = supabaseUser
       .from('knowledge_sources')
       .select('source_id, title, source_type, state_code, facility_id, tags, status, effective_date, updated_at, citation_text, current_version, approver_user_id')
       .order('updated_at', { ascending: false })
