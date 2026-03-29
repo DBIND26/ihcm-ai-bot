@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import BuildingDetail from './BuildingDetail';
 
 // Feature flag — set to true to show hospitalization data on dashboard
-const SHOW_HOSPITALIZATIONS = false;
+const SHOW_HOSPITALIZATIONS = true;
 
 export const RISK_COLORS = {
   critical: { bg: '#fef2f2', border: '#fca5a5', text: '#991b1b', label: 'CRITICAL' },

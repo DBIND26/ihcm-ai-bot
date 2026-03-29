@@ -923,7 +923,7 @@ export const WORKFLOWS = {
   hospitalization_review_don: {
     id: 'hospitalization_review_don',
     roleId: 'don',
-    hidden: true,
+    hidden: false,
     label: 'Hospitalization Review',
     description: 'Analyze a hospitalization transfer for avoidability using CMS PAH criteria and INTERACT pathways. No PHI — use de-identified case details only.',
     requiredInputs: [
@@ -988,7 +988,7 @@ export const WORKFLOWS = {
   hospitalization_review_admin: {
     id: 'hospitalization_review_admin',
     roleId: 'admin',
-    hidden: true,
+    hidden: false,
     label: 'Hospitalization Review',
     description: 'Review a hospitalization transfer for avoidability — operational and financial impact analysis.',
     requiredInputs: [
@@ -1029,7 +1029,7 @@ export const WORKFLOWS = {
   hospitalization_review_mds: {
     id: 'hospitalization_review_mds',
     roleId: 'mds',
-    hidden: true,
+    hidden: false,
     label: 'Hospitalization Review',
     description: 'Analyze a hospitalization transfer — focus on documentation and assessment impact.',
     requiredInputs: [
@@ -1063,7 +1063,7 @@ export const WORKFLOWS = {
   hospitalization_review_regional: {
     id: 'hospitalization_review_regional',
     roleId: 'regional',
-    hidden: true,
+    hidden: false,
     label: 'Hospitalization Review',
     description: 'Portfolio-level hospitalization analysis — identify patterns and focus areas across buildings.',
     requiredInputs: [
