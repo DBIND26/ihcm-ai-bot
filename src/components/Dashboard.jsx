@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
+import BuildingDetail from './BuildingDetail';
 
-const RISK_COLORS = {
+export const RISK_COLORS = {
   critical: { bg: '#fef2f2', border: '#fca5a5', text: '#991b1b', label: 'CRITICAL' },
   high_risk: { bg: '#fff7ed', border: '#fdba74', text: '#9a3412', label: 'HIGH RISK' },
   watch: { bg: '#fefce8', border: '#fde047', text: '#854d0e', label: 'WATCH' },
@@ -11,6 +12,7 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selectedSlug, setSelectedSlug] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -34,6 +36,19 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
 
   const { buildings, totals } = data;
 
+  if (selectedSlug) {
+    const building = buildings.find(b => b.slug === selectedSlug);
+    if (building) {
+      return (
+        <BuildingDetail
+          building={building}
+          onBack={() => setSelectedSlug(null)}
+          onChat={(slug) => onSelectBuilding(slug)}
+        />
+      );
+    }
+  }
+
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
       {/* Portfolio Summary */}
@@ -52,7 +67,7 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
 
           return (
             <div key={b.slug}
-              onClick={() => onSelectBuilding(b.slug)}
+              onClick={() => setSelectedSlug(b.slug)}
               style={{
                 backgroundColor: 'white', borderRadius: '10px',
                 border: `2px solid ${risk.border}`, padding: '16px',

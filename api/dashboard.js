@@ -24,7 +24,7 @@ export default async function handler(req, res) {
     // Get all buildings with context
     const { data: buildings, error: bErr } = await supabase
       .from('v_bot_building_context')
-      .select('slug, label, state, bed_capacity, census, occupancy_gap, strategic_status, composite_score, risk_label, payer_context, survey_context, staffing_context, risk_watchlist, strategic_notes')
+      .select('slug, label, state, bed_capacity, census, occupancy_gap, strategic_status, composite_score, risk_label, payer_context, survey_context, staffing_context, reimbursement_context, risk_watchlist, strategic_notes, market_summary, referral_summary, growth_barriers, growth_opportunities')
       .order('composite_score', { ascending: false, nullsFirst: false });
 
     if (bErr) {
@@ -35,7 +35,7 @@ export default async function handler(req, res) {
     // Get open alerts per facility
     const { data: alerts, error: aErr } = await supabase
       .from('ai_alerts')
-      .select('facility_id, severity, title, status')
+      .select('facility_id, alert_id, alert_category, alert_type, severity, title, description, recommended_action, owner_role, status, alert_date')
       .in('status', ['open', 'acknowledged', 'in_progress'])
       .order('alert_date', { ascending: false });
 
@@ -55,7 +55,18 @@ export default async function handler(req, res) {
       const slug = facilityMap[alert.facility_id];
       if (!slug) continue;
       if (!alertsBySlug[slug]) alertsBySlug[slug] = [];
-      alertsBySlug[slug].push({ severity: alert.severity, title: alert.title });
+      alertsBySlug[slug].push({
+        alert_id: alert.alert_id,
+        severity: alert.severity,
+        title: alert.title,
+        description: alert.description,
+        recommended_action: alert.recommended_action,
+        alert_category: alert.alert_category,
+        alert_type: alert.alert_type,
+        owner_role: alert.owner_role,
+        status: alert.status,
+        alert_date: alert.alert_date,
+      });
     }
 
     // Combine
