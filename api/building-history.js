@@ -6,6 +6,45 @@
 
 import { requireAuth } from './lib/requireAuth.js';
 
+function mapUploadedSurveyType(surveyType) {
+  switch (String(surveyType || '').toLowerCase()) {
+    case 'annual':
+    case 'standard':
+      return 'standard';
+    case 'complaint':
+      return 'complaint';
+    case 'revisit':
+      return 'revisit';
+    case 'infection_control':
+      return 'infection_control';
+    case 'life_safety':
+      return 'life_safety';
+    default:
+      return 'other';
+  }
+}
+
+function getMaxScopeSeverity(citations) {
+  const rank = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
+  let best = null;
+  let bestIdx = -1;
+
+  for (const citation of citations || []) {
+    const normalized = String(citation.scope_severity || citation.scopeSeverity || '')
+      .toUpperCase()
+      .replace(/[^A-L]/g, '');
+    for (const char of normalized) {
+      const idx = rank.indexOf(char);
+      if (idx > bestIdx) {
+        bestIdx = idx;
+        best = char;
+      }
+    }
+  }
+
+  return best;
+}
+
 export default async function handler(req, res) {
   const origin = req.headers.origin || '';
   if (origin.endsWith('.vercel.app') || origin.startsWith('http://localhost')) {
@@ -74,10 +113,10 @@ export default async function handler(req, res) {
     });
   }
 
-  // ── POST: add an event ──
+  // ── POST: add an event or persist an uploaded survey ──
   if (req.method === 'POST') {
-    const { buildingId, category, title, description, date } = req.body || {};
-    if (!buildingId || !title) return res.status(400).json({ error: 'buildingId and title required' });
+    const { buildingId, category, title, description, date, kind, survey } = req.body || {};
+    if (!buildingId) return res.status(400).json({ error: 'buildingId is required' });
 
     const { data: fac } = await supabase
       .from('facilities')
@@ -85,6 +124,48 @@ export default async function handler(req, res) {
       .eq('facility_code', buildingId)
       .single();
     if (!fac) return res.status(404).json({ error: 'Building not found' });
+
+    if (kind === 'survey') {
+      const citations = Array.isArray(survey?.citations) ? survey.citations : [];
+      const surveyDate = survey?.survey_date || survey?.date || date || new Date().toISOString().split('T')[0];
+      const surveyType = mapUploadedSurveyType(survey?.survey_type || survey?.type);
+      const maxSeverity = getMaxScopeSeverity(citations);
+      const hasIJ = citations.some(citation => /[JKL]/i.test(String(citation.scope_severity || citation.scopeSeverity || '')));
+
+      const deficiencies = citations.map(citation => ({
+        f_tag: citation.f_tag || citation.fTag || null,
+        scope_severity: citation.scope_severity || citation.scopeSeverity || null,
+        description: citation.tag_description || citation.description || null,
+        regulation: citation.regulation || null,
+        deficient_practice: citation.deficient_practice || null,
+        findings: citation.findings || null,
+        plan_of_correction_due: citation.plan_of_correction_due || null,
+      }));
+
+      const payload = {
+        facility_id: fac.facility_id,
+        survey_date: surveyDate,
+        survey_type: surveyType,
+        source: 'uploaded_2567',
+        total_deficiencies: survey?.total_citations ?? deficiencies.length,
+        scope_severity_max: maxSeverity,
+        has_immediate_jeopardy: hasIJ,
+        has_substandard_care: Boolean(maxSeverity && ['F', 'H', 'I', 'J', 'K', 'L'].includes(maxSeverity)),
+        deficiencies,
+        raw_data: survey || null,
+      };
+
+      const { data, error } = await supabase
+        .from('building_surveys')
+        .upsert(payload, { onConflict: 'facility_id,survey_date,survey_type,source' })
+        .select('survey_id')
+        .single();
+
+      if (error) return res.status(500).json({ error: error.message });
+      return res.status(200).json({ success: true, survey_id: data?.survey_id || null });
+    }
+
+    if (!title) return res.status(400).json({ error: 'title is required' });
 
     const { data, error } = await supabase
       .from('building_events')

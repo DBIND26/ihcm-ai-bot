@@ -72,28 +72,60 @@ export default async function handler(req, res) {
       .eq('source_id', source_id)
       .single();
 
+    if (!current) return res.status(404).json({ error: 'Knowledge source not found' });
+
+    const nextVersion = (current.current_version || 0) + 1;
+    let versionInserted = false;
+
+    if (current && newStatus === 'approved') {
+      const { error: versionError } = await supabase.from('knowledge_versions').insert({
+        source_id,
+        version_number: nextVersion,
+        content_snapshot: current.full_content?.slice(0, 50000) || '',
+        changed_by: authUser.id,
+        change_summary: `Status changed to ${newStatus} by ${authUser.email}`,
+      });
+
+      if (versionError) {
+        console.error('[ingest-knowledge] Version insert failed:', versionError.message);
+        return res.status(500).json({ error: 'Failed to create knowledge version audit trail' });
+      }
+      versionInserted = true;
+    }
+
+    const updatePayload = {
+      status: newStatus,
+      ...(newStatus === 'approved'
+        ? { current_version: nextVersion, approver_user_id: authUser.id }
+        : {}),
+    };
+
     const { data, error } = await supabase
       .from('knowledge_sources')
-      .update({ status: newStatus })
+      .update(updatePayload)
       .eq('source_id', source_id)
       .select('source_id, title, status')
       .single();
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+      if (versionInserted) {
+        await supabase
+          .from('knowledge_versions')
+          .delete()
+          .eq('source_id', source_id)
+          .eq('version_number', nextVersion)
+          .eq('changed_by', authUser.id)
+          .catch((cleanupErr) => {
+            console.error('[ingest-knowledge] Version rollback failed:', cleanupErr.message);
+          });
+      }
+      return res.status(500).json({ error: error.message });
+    }
 
-    // Write knowledge_versions row for audit trail
-    if (current && newStatus === 'approved') {
-      await supabase.from('knowledge_versions').insert({
-        source_id,
-        version_number: (current.current_version || 0) + 1,
-        content_snapshot: current.full_content?.slice(0, 50000) || '',
-        changed_by: authUser.id,
-        change_summary: `Status changed to ${newStatus} by ${authUser.email}`,
-      }).catch(() => {}); // non-blocking
-
-      // Increment version counter
-      await supabase.from('knowledge_sources')
-        .update({ current_version: (current.current_version || 0) + 1 })
+    if (newStatus !== 'approved' && current.current_version !== null) {
+      await supabase
+        .from('knowledge_sources')
+        .update({ approver_user_id: null })
         .eq('source_id', source_id)
         .catch(() => {});
     }

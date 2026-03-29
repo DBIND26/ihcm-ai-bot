@@ -576,8 +576,9 @@ export default async function handler(req, res) {
     }
 
     // Enforce role authorization: user must have this bot role
-    const allowedRoles = authProfile.allowed_bot_roles || [];
-    if (allowedRoles.length > 0 && !allowedRoles.includes(botId)) {
+    const allowedRoles = Array.isArray(authProfile.allowed_bot_roles) ? authProfile.allowed_bot_roles : [];
+    const isSuperAdmin = authProfile.app_role === 'super_admin';
+    if (!isSuperAdmin && (allowedRoles.length === 0 || !allowedRoles.includes(botId))) {
       return res.status(403).json({ error: `You do not have access to the ${botId} role` });
     }
 

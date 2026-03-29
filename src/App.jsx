@@ -290,20 +290,18 @@ export default function App() {
         newDocs.push(data);
       }
 
-      // All files parsed successfully — persist to Supabase building_surveys
+      // All files parsed successfully — persist parsed survey data to Supabase
       if (activeBuildingId && activeBuildingId !== 'none') {
         for (const doc of newDocs) {
-          // Save to Supabase via building-history (best-effort)
+          // Save parsed survey details server-side so history survives across devices
           try {
             await fetch('/api/building-history', {
               method: 'POST',
               headers: authHeaders(),
               body: JSON.stringify({
                 buildingId: activeBuildingId,
-                category: 'survey',
-                title: `2567 Upload: ${doc.facility_name || doc._fileName || 'Survey'} (${doc.survey_date || 'date unknown'})`,
-                description: `${doc.total_citations || 0} citations. ${doc.critical_tags?.length ? 'Critical: ' + doc.critical_tags.join(', ') : 'No critical tags.'}`,
-                date: doc.survey_date || new Date().toISOString().split('T')[0],
+                kind: 'survey',
+                survey: doc,
               }),
             });
           } catch { /* non-blocking */ }
