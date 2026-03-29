@@ -106,7 +106,7 @@ BUILDING-AWARE RULES
  * @param {string|null} params.historyContext - building history text (surveys + events)
  * @returns {string} assembled system prompt
  */
-function assembleSystemPrompt({ roleId, buildingId, isDraft, workflowId, buildingContext, documentContext, historyContext }) {
+function assembleSystemPrompt({ roleId, buildingId, isDraft, workflowId, buildingContext, documentContext, historyContext, knowledgeContext }) {
   const layers = [];
 
   // Layer 1: Global core
@@ -140,7 +140,12 @@ function assembleSystemPrompt({ roleId, buildingId, isDraft, workflowId, buildin
     layers.push(historyContext);
   }
 
-  // Layer 5c: Uploaded document context (parsed 2567 citations, etc.)
+  // Layer 5c: Knowledge sources (governed content from Supabase)
+  if (knowledgeContext) {
+    layers.push(`KNOWLEDGE BASE\nThe following governed reference content is available. Use it to ground your answers in verified organizational knowledge.\n\n${knowledgeContext}`);
+  }
+
+  // Layer 5d: Uploaded document context (parsed 2567 citations, etc.)
   if (documentContext) {
     layers.push(`UPLOADED DOCUMENT CONTEXT\nThe user has uploaded a survey document. Use this data to give specific, citation-level guidance.\n\n${documentContext}`);
   }
@@ -325,6 +330,61 @@ async function fetchGlobalCore() {
     if (error || !data?.length) return null;
     return data.map(row => row.content).join('\n\n');
   } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch relevant knowledge sources for the current role and building.
+ * Returns a formatted text block, or null if none found.
+ */
+async function fetchKnowledgeContext(roleId, buildingId, stateCode) {
+  if (!supabase) return null;
+
+  try {
+    // Map roles to relevant source types
+    const roleSourceTypes = {
+      don: ['corporate_playbook', 'survey_template', 'operator_practice'],
+      mds: ['corporate_playbook', 'payer_guidance', 'state_reimbursement'],
+      billing: ['payer_guidance', 'state_reimbursement'],
+      admin: ['corporate_playbook', 'operator_practice', 'referral_intelligence'],
+      regional: ['corporate_playbook', 'operator_practice', 'state_reimbursement', 'referral_intelligence'],
+    };
+
+    const types = roleSourceTypes[roleId] || ['corporate_playbook', 'operator_practice'];
+
+    let query = supabase
+      .from('knowledge_sources')
+      .select('title, source_type, citation_text, full_content, state_code, tags')
+      .eq('status', 'approved')
+      .in('source_type', types)
+      .order('updated_at', { ascending: false })
+      .limit(5);
+
+    // Filter by state if building has one
+    if (stateCode) {
+      query = query.or(`state_code.eq.${stateCode},state_code.is.null`);
+    }
+
+    const { data, error } = await query;
+    if (error || !data?.length) return null;
+
+    // Format knowledge sources into context block (max 15K chars total)
+    const parts = [];
+    let totalLen = 0;
+    const MAX_KNOWLEDGE = 15000;
+
+    for (const source of data) {
+      const content = source.full_content || source.citation_text || '';
+      const chunk = `=== ${source.title} (${source.source_type}${source.state_code ? ', ' + source.state_code : ''}) ===\n${content.slice(0, 3000)}`;
+      if (totalLen + chunk.length > MAX_KNOWLEDGE) break;
+      parts.push(chunk);
+      totalLen += chunk.length;
+    }
+
+    return parts.length > 0 ? parts.join('\n\n') : null;
+  } catch (err) {
+    console.warn('Knowledge fetch error:', err.message);
     return null;
   }
 }
@@ -530,6 +590,8 @@ export default async function handler(req, res) {
 
     // ── Fetch context layers ──
     const buildingContext = await fetchBuildingContext(buildingId);
+    const stateCode = buildingContext?.state || null;
+    const knowledgeContext = await fetchKnowledgeContext(botId, buildingId, stateCode);
 
     // ── Assemble system prompt ──
     const systemPrompt = assembleSystemPrompt({
@@ -538,6 +600,7 @@ export default async function handler(req, res) {
       isDraft: isDraft || false,
       workflowId: workflowId || null,
       buildingContext,
+      knowledgeContext,
       documentContext: typeof documentContext === 'string' ? documentContext.slice(0, MAX_DOCUMENT_CONTEXT) : null,
       historyContext: typeof historyContext === 'string' ? historyContext.slice(0, MAX_HISTORY_CONTEXT) : null,
     });

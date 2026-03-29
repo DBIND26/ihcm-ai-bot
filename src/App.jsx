@@ -44,8 +44,14 @@ export default function App() {
 
   // Census CSV upload state
   const [isUploadingCensus, setIsUploadingCensus] = useState(false);
-  const [censusResult, setCensusResult] = useState(null); // { success, reportDate, buildings }
+  const [censusResult, setCensusResult] = useState(null);
   const censusInputRef = useRef(null);
+
+  // Knowledge/playbook upload state
+  const [showPlaybookForm, setShowPlaybookForm] = useState(false);
+  const [playbookData, setPlaybookData] = useState({ title: '', source_type: 'corporate_playbook', content: '', state_code: '', tags: '' });
+  const [isUploadingPlaybook, setIsUploadingPlaybook] = useState(false);
+  const [playbookResult, setPlaybookResult] = useState(null);
 
   // Welcome guide state — guarded read for privacy-restricted browsers
   const [seenWelcome, setSeenWelcome] = useState(() => {
@@ -319,6 +325,40 @@ export default function App() {
     } finally {
       setIsUploadingCensus(false);
       if (censusInputRef.current) censusInputRef.current.value = '';
+    }
+  };
+
+  // Handle playbook/knowledge upload
+  const handlePlaybookSubmit = async () => {
+    if (!playbookData.title.trim() || !playbookData.content.trim()) {
+      setUploadError('Title and content are required');
+      return;
+    }
+    setIsUploadingPlaybook(true);
+    setPlaybookResult(null);
+    setUploadError(null);
+    try {
+      const res = await fetch('/api/ingest-knowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: playbookData.title.trim(),
+          source_type: playbookData.source_type,
+          content: playbookData.content.trim(),
+          state_code: playbookData.state_code || undefined,
+          tags: playbookData.tags ? playbookData.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      setPlaybookResult(data);
+      setPlaybookData({ title: '', source_type: 'corporate_playbook', content: '', state_code: '', tags: '' });
+      setShowPlaybookForm(false);
+      setTimeout(() => setPlaybookResult(null), 8000);
+    } catch (err) {
+      setUploadError(err.message || 'Failed to upload playbook');
+    } finally {
+      setIsUploadingPlaybook(false);
     }
   };
 
@@ -775,6 +815,25 @@ export default function App() {
             : 'Upload Census'}
         </button>
 
+        {/* Knowledge/Playbook upload */}
+        <button
+          onClick={() => setShowPlaybookForm(!showPlaybookForm)}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '6px',
+            border: '1px solid #d1d5db',
+            backgroundColor: playbookResult ? '#dcfce7' : showPlaybookForm ? '#dbeafe' : '#f3f4f6',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: '500',
+            color: playbookResult ? '#166534' : showPlaybookForm ? '#1e40af' : '#6b7280',
+            transition: 'all 0.2s ease',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          {playbookResult ? 'Playbook saved!' : 'Add Playbook'}
+        </button>
+
         {/* Building History toggle */}
         {activeBuildingId && activeBuildingId !== 'none' && (
           <button
@@ -847,6 +906,79 @@ export default function App() {
           loading={loadingConversations}
           onLoadConversation={handleLoadConversation}
         />
+      )}
+
+      {/* Playbook Upload Form */}
+      {showPlaybookForm && (
+        <div style={{
+          padding: '16px 24px', backgroundColor: '#f8fafc',
+          borderBottom: '1px solid #e5e7eb',
+        }}>
+          <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '600', color: '#1f2937' }}>
+            Add Knowledge Source / Playbook
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input type="text" placeholder="Title (e.g., IHCM Falls Prevention Protocol)"
+                value={playbookData.title}
+                onChange={e => setPlaybookData(prev => ({ ...prev, title: e.target.value }))}
+                style={{ flex: 1, padding: '8px 12px', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit' }} />
+              <select value={playbookData.source_type}
+                onChange={e => setPlaybookData(prev => ({ ...prev, source_type: e.target.value }))}
+                style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '13px' }}>
+                <option value="corporate_playbook">Corporate Playbook</option>
+                <option value="operator_practice">Operator Practice</option>
+                <option value="state_reimbursement">State Reimbursement</option>
+                <option value="payer_guidance">Payer Guidance</option>
+                <option value="survey_template">Survey Template</option>
+                <option value="faq">FAQ</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <select value={playbookData.state_code}
+                onChange={e => setPlaybookData(prev => ({ ...prev, state_code: e.target.value }))}
+                style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '13px' }}>
+                <option value="">All states</option>
+                <option value="AR">Arkansas</option>
+                <option value="OH">Ohio</option>
+                <option value="PA">Pennsylvania</option>
+              </select>
+              <input type="text" placeholder="Tags (comma-separated)"
+                value={playbookData.tags}
+                onChange={e => setPlaybookData(prev => ({ ...prev, tags: e.target.value }))}
+                style={{ flex: 1, padding: '8px 12px', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit' }} />
+            </div>
+            <textarea placeholder="Paste the document content here..."
+              value={playbookData.content}
+              onChange={e => setPlaybookData(prev => ({ ...prev, content: e.target.value }))}
+              style={{
+                padding: '8px 12px', borderRadius: '6px', border: '1px solid #d1d5db',
+                fontSize: '13px', fontFamily: 'inherit', resize: 'vertical', minHeight: '120px',
+              }} />
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button onClick={handlePlaybookSubmit} disabled={isUploadingPlaybook || !playbookData.title.trim() || !playbookData.content.trim()}
+                style={{
+                  padding: '8px 16px', borderRadius: '6px', border: 'none',
+                  backgroundColor: (playbookData.title.trim() && playbookData.content.trim()) ? '#2563eb' : '#d1d5db',
+                  color: 'white', cursor: (playbookData.title.trim() && playbookData.content.trim()) ? 'pointer' : 'not-allowed',
+                  fontSize: '13px', fontWeight: '600',
+                }}>
+                {isUploadingPlaybook ? 'Saving...' : 'Save to Knowledge Base'}
+              </button>
+              <button onClick={() => setShowPlaybookForm(false)}
+                style={{
+                  padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db',
+                  backgroundColor: 'white', cursor: 'pointer', fontSize: '13px', color: '#6b7280',
+                }}>
+                Cancel
+              </button>
+              <span style={{ fontSize: '12px', color: '#9ca3af', marginLeft: 'auto' }}>
+                Content will be available to the bot in all future conversations
+              </span>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Upload error */}

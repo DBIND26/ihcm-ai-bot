@@ -34,6 +34,7 @@ const { default: verifyHandler } = await import('./api/verify-access.js');
 const { default: feedbackHandler } = await import('./api/feedback.js');
 const { default: conversationsHandler } = await import('./api/conversations.js');
 const { default: ingestCensusHandler } = await import('./api/ingest-census.js');
+const { default: ingestKnowledgeHandler } = await import('./api/ingest-knowledge.js');
 
 const PORT = 3001;
 
@@ -86,6 +87,22 @@ const server = http.createServer(async (req, res) => {
       req.url = url.pathname + url.search; // preserve query string
       await conversationsHandler(req, resAdapter);
       return;
+    }
+
+    // Route: /api/ingest-knowledge — knowledge source ingestion
+    if (url.pathname === '/api/ingest-knowledge') {
+      if (req.method === 'GET') {
+        req.url = url.pathname + url.search;
+        await ingestKnowledgeHandler(req, resAdapter);
+        return;
+      }
+      if (req.method === 'POST') {
+        let body = '';
+        for await (const chunk of req) { body += chunk; }
+        try { req.body = JSON.parse(body); } catch { req.body = {}; }
+        await ingestKnowledgeHandler(req, resAdapter);
+        return;
+      }
     }
 
     // Route: /api/ingest-census — CSV census upload
