@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getRoleById, getRoleIds } from '../v2_definitive/src/bots.js';
 import { getActiveBuildings } from '../v2_definitive/src/buildings.js';
 import { WORKFLOWS, getWorkflowsForRole } from '../v2_definitive/src/workflows.js';
@@ -1229,6 +1229,9 @@ export default function App() {
               Clear 2567 context
             </button>
           )}
+          <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#d97706' }}>
+            Do not enter patient names, DOBs, SSNs, or other PHI
+          </span>
         </div>
       </div>
 
