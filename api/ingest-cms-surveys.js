@@ -1,18 +1,14 @@
 // ============================================================================
 // CMS Survey Data Ingestion — POST /api/ingest-cms-surveys
 // ============================================================================
-// Fetches health deficiency data from the CMS Nursing Home Compare public API
+// Fetches health deficiency data from the CMS Provider Data API
 // for all IHCM buildings and stores it in building_surveys.
 //
-// CMS API: data.cms.gov — Health Deficiencies dataset
-// Endpoint: https://data.cms.gov/resource/r5ix-sfxw.json
-//
-// Pulls last 2 years of survey data per facility by CMS provider ID.
+// New API: https://data.cms.gov/provider-data/api/1/datastore/query/r5ix-sfxw/0
 
 import { requireAuth } from './lib/requireAuth.js';
 
-const CMS_DEFICIENCIES_URL = 'https://data.cms.gov/resource/r5ix-sfxw.json';
-const CMS_SURVEYS_URL = 'https://data.cms.gov/resource/djen-97ju.json';
+const CMS_API_BASE = 'https://data.cms.gov/provider-data/api/1/datastore/query/r5ix-sfxw/0';
 
 export default async function handler(req, res) {
   const origin = req.headers.origin || '';
@@ -40,9 +36,6 @@ export default async function handler(req, res) {
     }
 
     const results = [];
-    const twoYearsAgo = new Date();
-    twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-    const cutoffDate = twoYearsAgo.toISOString().split('T')[0];
 
     for (const facility of facilities) {
       const providerId = facility.cms_provider_id;
@@ -50,31 +43,40 @@ export default async function handler(req, res) {
       let surveysProcessed = 0;
 
       try {
-        // Fetch health deficiencies from CMS
-        const defUrl = `${CMS_DEFICIENCIES_URL}?$where=federal_provider_number='${providerId}' AND survey_date_output>='${cutoffDate}'&$limit=500&$order=survey_date_output DESC`;
-        const defRes = await fetch(defUrl, {
+        // Fetch from new CMS Provider Data API
+        const url = `${CMS_API_BASE}?` + new URLSearchParams({
+          'conditions[0][property]': 'cms_certification_number_ccn',
+          'conditions[0][value]': providerId,
+          'conditions[0][operator]': '=',
+          'limit': '500',
+          'sort[0][property]': 'survey_date',
+          'sort[0][order]': 'desc',
+        }).toString();
+
+        const cmsRes = await fetch(url, {
           headers: { 'Accept': 'application/json' },
         });
 
-        if (defRes.ok) {
-          deficiencies = await defRes.json();
+        if (cmsRes.ok) {
+          const data = await cmsRes.json();
+          deficiencies = data.results || [];
         }
       } catch (err) {
-        console.warn(`[cms-ingest] Deficiency fetch failed for ${providerId}:`, err.message);
+        console.warn(`[cms-ingest] Fetch failed for ${providerId}:`, err.message);
       }
 
       if (deficiencies.length === 0) {
-        results.push({ building: facility.facility_code, surveys: 0, deficiencies: 0, status: 'no_data' });
+        results.push({ building: facility.facility_code, name: facility.facility_name, surveys: 0, deficiencies: 0, status: 'no_data' });
         continue;
       }
 
       // Group deficiencies by survey date + type
       const surveyMap = {};
       for (const def of deficiencies) {
-        const surveyDate = def.survey_date_output?.split('T')[0];
+        const surveyDate = def.survey_date;
         if (!surveyDate) continue;
 
-        const surveyType = mapCmsSurveyType(def.survey_type);
+        const surveyType = mapCmsSurveyType(def.survey_type, def.complaint_deficiency);
         const key = `${surveyDate}::${surveyType}`;
 
         if (!surveyMap[key]) {
@@ -88,31 +90,34 @@ export default async function handler(req, res) {
           };
         }
 
-        const scopeSeverity = def.scope_severity_code || def.scope_severity || null;
+        const scopeSeverity = def.scope_severity_code || null;
         const defRecord = {
-          f_tag: def.deficiency_tag || def.tag_number || null,
+          f_tag: def.deficiency_prefix && def.deficiency_tag_number
+            ? `${def.deficiency_prefix}${def.deficiency_tag_number}`
+            : def.deficiency_tag_number || null,
           scope_severity: scopeSeverity,
-          description: def.deficiency_description || def.tag_description || null,
+          description: def.deficiency_description || null,
           category: def.deficiency_category || null,
+          corrected: def.deficiency_corrected || null,
+          correction_date: def.correction_date || null,
+          is_complaint: def.complaint_deficiency === 'Y',
         };
 
         surveyMap[key].deficiencies.push(defRecord);
 
-        // Check for IJ (severity level J, K, L)
+        // Check for IJ (scope/severity J, K, L)
         if (scopeSeverity && /[JKL]/.test(scopeSeverity)) {
           surveyMap[key].has_ij = true;
         }
-        // Check for substandard care (severity F, H, I, J, K, L on certain tags)
         if (scopeSeverity && /[FHIJKL]/.test(scopeSeverity)) {
           surveyMap[key].has_substandard = true;
         }
-        // Track max scope/severity
         if (scopeSeverity && (!surveyMap[key].max_scope_severity || scopeSeverity > surveyMap[key].max_scope_severity)) {
           surveyMap[key].max_scope_severity = scopeSeverity;
         }
       }
 
-      // Insert surveys into Supabase
+      // Upsert surveys into Supabase
       for (const [, survey] of Object.entries(surveyMap)) {
         const { error: insertErr } = await supabase
           .from('building_surveys')
@@ -136,6 +141,7 @@ export default async function handler(req, res) {
 
       results.push({
         building: facility.facility_code,
+        name: facility.facility_name,
         surveys: surveysProcessed,
         deficiencies: deficiencies.length,
         status: 'ok',
@@ -154,17 +160,17 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error('[cms-ingest] Error:', err.message);
-    return res.status(500).json({ error: 'CMS data ingestion failed' });
+    return res.status(500).json({ error: 'CMS data ingestion failed: ' + err.message });
   }
 }
 
-function mapCmsSurveyType(cmsType) {
+function mapCmsSurveyType(cmsType, isComplaint) {
+  if (isComplaint === 'Y') return 'complaint';
   if (!cmsType) return 'standard';
   const t = cmsType.toLowerCase();
   if (t.includes('complaint')) return 'complaint';
   if (t.includes('revisit')) return 'revisit';
   if (t.includes('infection')) return 'infection_control';
   if (t.includes('life safety') || t.includes('lsc')) return 'life_safety';
-  if (t.includes('health')) return 'standard';
   return 'standard';
 }
