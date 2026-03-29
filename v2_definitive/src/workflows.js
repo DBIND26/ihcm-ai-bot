@@ -176,8 +176,8 @@ export const WORKFLOWS = {
 
   // ── Admin workflows ──
 
-  census_growth_plan: {
-    id: 'census_growth_plan',
+  admin_census_growth_plan: {
+    id: 'admin_census_growth_plan',
     roleId: 'admin',
     label: 'Census Growth Plan',
     description: 'Draft a 30/60/90-day census growth plan.',

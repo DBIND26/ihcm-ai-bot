@@ -92,50 +92,48 @@ function parseHeader(text) {
     if (fallbackDate) info.survey_date = fallbackDate[1];
   }
 
-  // Facility name — multiple strategies to avoid capturing address/form text
-  const namePatterns = [
-    // "NAME OF PROVIDER OR SUPPLIER\n<actual name>"
-    /NAME\s+OF\s+PROVIDER\s+OR\s+SUPPLIER\s*[\n\r]+\s*([A-Z][A-Z\s\-\.\'\&\/]+?)(?:\s*\n|\s{3,})/i,
-    // "NAME OF PROVIDER\n<actual name>"
-    /NAME\s+OF\s+PROVIDER\s*[:\-]?\s*[\n\r]+\s*([A-Z][A-Z\s\-\.\'\&\/]+?)(?:\s*\n|\s{3,})/i,
-    // "FACILITY NAME: <name>" on same line
-    /FACILITY\s+NAME\s*[:\-]\s*([A-Z][A-Z\s\-\.\'\&\/]+?)(?:\s*\n|\s{3,})/i,
-    // Provider name near the top (common in CMS forms)
-    /PROVIDER\s+NAME\s*[:\-]?\s*(.+?)(?:\n|$)/i,
-  ];
+  // PRIORITY 1: Map provider number to known building name (most reliable)
+  const PROVIDER_MAP = {
+    '045350': 'Nightingale at Arkadelphia',
+    '045437': 'Nightingale at Stonegate',
+    '045403': 'Nightingale at Glenwood',
+    '045176': 'The Woods',
+    '045190': 'Nightingale at Crossett',
+    '366335': 'Villa at Marymount',
+    '395042': 'Nightingale Erie',
+  };
+  if (info.provider_number && PROVIDER_MAP[info.provider_number]) {
+    info.facility_name = PROVIDER_MAP[info.provider_number];
+  }
 
-  for (const pat of namePatterns) {
-    const match = text.slice(0, 3000).match(pat);
-    if (match) {
-      let name = match[1].trim();
-      // Clean up: remove trailing address-like text (starts with digits)
-      name = name.replace(/\s*\d{2,5}\s+[A-Z].+$/, '').trim();
-      // Remove "OR SUPPLIER" if captured
-      name = name.replace(/\bOR\s+SUPPLIER\b.*/i, '').trim();
-      // Remove "STREET ADDRESS" form labels
-      name = name.replace(/\bSTREET\s+ADDRESS\b.*/i, '').trim();
-      if (name.length > 3 && name.length < 100 && !/^\d/.test(name)) {
-        info.facility_name = name;
-        break;
+  // PRIORITY 2: Regex extraction from form text (with aggressive cleanup)
+  if (!info.facility_name) {
+    const namePatterns = [
+      /NAME\s+OF\s+PROVIDER\s+OR\s+SUPPLIER\s*[\n\r]+\s*([A-Z][A-Z\s\-\.\'\&\/]+?)(?:\s*\n|\s{3,})/i,
+      /NAME\s+OF\s+PROVIDER\s*[:\-]?\s*[\n\r]+\s*([A-Z][A-Z\s\-\.\'\&\/]+?)(?:\s*\n|\s{3,})/i,
+      /FACILITY\s+NAME\s*[:\-]\s*([A-Z][A-Z\s\-\.\'\&\/]+?)(?:\s*\n|\s{3,})/i,
+    ];
+
+    for (const pat of namePatterns) {
+      const match = text.slice(0, 3000).match(pat);
+      if (match) {
+        let name = match[1].trim();
+        // Remove trailing address, city/state/zip, form labels
+        name = name.replace(/\s*\d{2,5}\s+[A-Z].+$/, '').trim();
+        name = name.replace(/\bOR\s+SUPPLIER\b.*/i, '').trim();
+        name = name.replace(/\bSTREET\s+ADDRESS\b.*/i, '').trim();
+        name = name.replace(/,\s*[A-Z]{2}\s+\d{5}.*$/, '').trim(); // ", AR 71923"
+        name = name.replace(/\s+[A-Z]{2}\s+\d{5}.*$/, '').trim(); // " AR 71923"
+        name = name.replace(/,\s*[A-Z]{2}\s*$/, '').trim(); // ", AR"
+        if (name.length > 3 && name.length < 80 && !/^\d/.test(name) && !/^(CITY|STATE|ZIP|STREET|ADDRESS)/.test(name)) {
+          info.facility_name = name;
+          break;
+        }
       }
     }
   }
 
-  // Fallback: map provider number to known building name
-  if (!info.facility_name && info.provider_number) {
-    const PROVIDER_MAP = {
-      '045350': 'Nightingale at Arkadelphia',
-      '045437': 'Nightingale at Stonegate',
-      '045403': 'Nightingale at Glenwood',
-      '045176': 'The Woods',
-      '045190': 'Nightingale at Crossett',
-      '366335': 'Villa at Marymount',
-      '395042': 'Nightingale Erie',
-    };
-    info.facility_name = PROVIDER_MAP[info.provider_number] || null;
-  }
-
-  // Fallback: try to find a known IHCM building name in text
+  // PRIORITY 3: Find a known IHCM building name in text
   if (!info.facility_name) {
     const knownNames = ['NIGHTINGALE', 'ARKADELPHIA', 'STONEGATE', 'GLENWOOD', 'THE WOODS', 'CROSSETT', 'MARYMOUNT', 'VILLA AT'];
     const topText = text.slice(0, 3000).toUpperCase();
@@ -204,6 +202,20 @@ function extractScopeSeverity(text) {
   // Fallback: look for single uppercase letter A-L after a regulation citation
   match = text.match(/48[23]\.\d+[^\n]*?\b([D-L])\b/);
   if (match) return match[1].toUpperCase();
+
+  // CMS 2567 table layout: severity often appears as a letter in a column
+  // Look for patterns like "F 689    D" or within first 5 lines
+  const firstLines = text.split('\n').slice(0, 8).join(' ');
+  match = firstLines.match(/F\s*\d{3,4}\s+([A-L])\b/);
+  if (match) return match[1].toUpperCase();
+
+  // Last resort: any standalone capital letter D-L on a short line in the section header area
+  for (const line of text.split('\n').slice(0, 6)) {
+    const trimmed = line.trim();
+    if (trimmed.length >= 1 && trimmed.length <= 3 && /^[D-L]$/.test(trimmed)) {
+      return trimmed.toUpperCase();
+    }
+  }
 
   return null;
 }

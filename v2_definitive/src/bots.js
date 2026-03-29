@@ -299,7 +299,7 @@ THINGS YOU DO NOT DO
       'Draft a community outreach strategy for referral development',
     ],
 
-    workflows: ['census_growth_plan', 'board_memo', 'survey_prep_checklist'],
+    workflows: ['admin_census_growth_plan', 'board_memo', 'survey_prep_checklist'],
   },
 
   {

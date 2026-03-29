@@ -28,11 +28,35 @@ const BUILDING_KEYWORDS = {
 };
 
 function detectBuildings(text) {
+  // Only detect buildings that appear as section headers or prominent labels.
+  // A building name in body text (e.g., "coordinate with Stonegate") should NOT
+  // create a separate entry for that building.
   const found = new Set();
-  const lower = text.toLowerCase();
-  for (const [keyword, slug] of Object.entries(BUILDING_KEYWORDS)) {
-    if (lower.includes(keyword)) found.add(slug);
+  const lines = text.split('\n');
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Match lines that look like section headers:
+    // - All caps line with a building name
+    // - "Building: Name" or "## Name" patterns
+    // - Lines that are mostly the building name (short lines)
+    const isHeader = (
+      trimmed.length < 80 &&
+      (trimmed === trimmed.toUpperCase() || /^#+\s/.test(trimmed) || /^(?:building|facility|location)\s*[:\-]/i.test(trimmed))
+    );
+    if (!isHeader && trimmed.length > 80) continue; // skip body text lines
+
+    const lower = trimmed.toLowerCase();
+    for (const [keyword, slug] of Object.entries(BUILDING_KEYWORDS)) {
+      if (lower.includes(keyword) && !found.has(slug)) {
+        // Additional check: the keyword should be a substantial part of the line
+        if (keyword.length > trimmed.length * 0.2 || isHeader) {
+          found.add(slug);
+        }
+      }
+    }
   }
+
   return [...found];
 }
 
@@ -130,7 +154,16 @@ export default async function handler(req, res) {
 
   const auth = await requireAuth(req);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
-  const { user: authUser, supabase } = auth;
+  const { user: authUser, profile: authProfile, supabase } = auth;
+
+  // Only marketing/admin/regional roles can upload SWOTs
+  const allowedRoles = ['super_admin', 'corporate_admin', 'regional_director'];
+  const allowedBotRoles = authProfile?.allowed_bot_roles || [];
+  const hasMarketingAccess = allowedRoles.includes(authProfile?.app_role) ||
+    ['marketing', 'admin', 'regional'].some(r => allowedBotRoles.includes(r));
+  if (!hasMarketingAccess) {
+    return res.status(403).json({ error: 'SWOT upload requires marketing, admin, or regional access' });
+  }
 
   try {
     const chunks = [];
@@ -167,9 +200,20 @@ export default async function handler(req, res) {
     }
 
     // Detect buildings from content
-    let buildingSlugs = explicitBuildingId ? [explicitBuildingId] : detectBuildings(textContent);
+    // If explicit building_id is provided, use it exclusively (no auto-detection)
+    // If not, try to detect from section headers — but only clear headers, not body mentions
+    let buildingSlugs;
+    if (explicitBuildingId) {
+      buildingSlugs = [explicitBuildingId];
+    } else {
+      buildingSlugs = detectBuildings(textContent);
+      // Safety: if detection found more than 3 buildings, it's probably noise — store as portfolio
+      if (buildingSlugs.length > 3) {
+        console.warn(`[ingest-swot] Detected ${buildingSlugs.length} buildings — likely noise, storing as portfolio`);
+        buildingSlugs = [];
+      }
+    }
 
-    // If no buildings detected, store as portfolio-level
     const results = [];
 
     if (buildingSlugs.length === 0) {
