@@ -11,54 +11,23 @@
 //
 // If url is provided and content is empty, fetches the URL and extracts text.
 
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { requireAuth } from './lib/requireAuth.js';
 
 const MAX_CONTENT_LENGTH = 100000;
-
-function verifySessionToken(userName, token, secret) {
-  if (!userName || !token || !secret) return false;
-
-  const [expiresAtRaw, signature] = String(token).split('.');
-  const expiresAt = Number(expiresAtRaw);
-  if (!expiresAt || !signature || Date.now() > expiresAt) return false;
-
-  const payload = `${String(userName).trim().toLowerCase()}:${expiresAt}`;
-  const expected = createHmac('sha256', secret).update(payload).digest('hex');
-
-  try {
-    return timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'));
-  } catch {
-    return false;
-  }
-}
 
 export default async function handler(req, res) {
   const origin = req.headers.origin || '';
   if (origin.endsWith('.vercel.app') || origin.startsWith('http://localhost')) {
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-IHCM-User, X-IHCM-Session-Token');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-  const accessCode = process.env.BETA_ACCESS_CODE;
-  if (!supabaseUrl || !supabaseKey) {
-    return res.status(503).json({ error: 'Supabase not configured' });
-  }
-  if (!accessCode) {
-    return res.status(503).json({ error: 'Knowledge ingestion access is not configured' });
-  }
-
-  const userName = req.headers['x-ihcm-user'];
-  const sessionToken = req.headers['x-ihcm-session-token'];
-  if (!verifySessionToken(userName, sessionToken, accessCode)) {
-    return res.status(401).json({ error: 'Knowledge ingestion requires a valid beta session' });
-  }
-
-  const { createClient } = await import('@supabase/supabase-js');
-  const supabase = createClient(supabaseUrl, supabaseKey);
+  // Auth check
+  const auth = await requireAuth(req);
+  if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+  const { user: authUser, supabase } = auth;
 
   // ── GET: list knowledge sources ──
   if (req.method === 'GET') {
@@ -102,7 +71,7 @@ export default async function handler(req, res) {
     console.log(JSON.stringify({
       event: 'knowledge_status_changed',
       source_id, new_status: newStatus,
-      user: userName,
+      user: authUser.email,
       timestamp: new Date().toISOString(),
     }));
 

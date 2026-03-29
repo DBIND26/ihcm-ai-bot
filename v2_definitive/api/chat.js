@@ -22,7 +22,7 @@ import { createClient } from '@supabase/supabase-js';
 import { getRoleById } from '../src/bots.js';
 import { getBuildingById, getBuildingProfile } from '../src/buildings.js';
 import { getWorkflowById } from '../src/workflows.js';
-import { getOrCreateBetaUser } from '../../api/lib/betaUser.js';
+// betaUser import removed — using auth.uid() from requireAuth
 
 // ── Configuration ──
 
@@ -524,7 +524,7 @@ function getCorsHeaders(origin) {
     return {
       'Access-Control-Allow-Origin': origin,
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     };
   }
   return {};
@@ -600,7 +600,16 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { botId, buildingId, isDraft, messages, workflowId, documentContext, historyContext, userName } = req.body;
+    // ── Auth check ──
+    const { requireAuth } = await import('../../api/lib/requireAuth.js');
+    const auth = await requireAuth(req);
+    if (!auth) {
+      return res.status(401).json({ error: 'Unauthorized — valid session required' });
+    }
+    const { user: authUser, profile: authProfile } = auth;
+
+    const { botId, buildingId, isDraft, messages, workflowId, documentContext, historyContext } = req.body;
+    const userName = authProfile.full_name || authUser.email;
     const requestId = crypto.randomUUID?.() || `req_${Date.now()}`;
 
     // Validate botId
@@ -673,9 +682,9 @@ export default async function handler(req, res) {
     // ── Persist conversation server-side (best-effort) ──
     let conversationId = req.body.conversationId || null;
     try {
-      if (supabase && userName) {
-        const betaUserId = await getOrCreateBetaUser(supabase, userName, botId);
-        if (betaUserId) {
+      if (supabase && authUser) {
+        const userId = authUser.id;
+        if (userId) {
           // Resolve building slug to facility UUID for FK
           let facilityId = null;
           if (buildingId && buildingId !== 'none') {
@@ -692,7 +701,7 @@ export default async function handler(req, res) {
             const { data: conv } = await supabase
               .from('conversations')
               .insert({
-                user_id: betaUserId,
+                user_id: userId,
                 facility_id: facilityId,
                 bot_id: botId || null,
                 workflow_type: workflowId || null,

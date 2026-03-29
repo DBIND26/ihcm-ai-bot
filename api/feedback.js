@@ -5,7 +5,7 @@
 // persists it. If Supabase is configured, stores in public.feedback_events.
 // Otherwise, logs to server console for later review.
 
-import { getOrCreateBetaUser } from './lib/betaUser.js';
+import { requireAuth } from './lib/requireAuth.js';
 
 let lastFeedback = {};
 const RATE_LIMIT_MS = 2000; // 2 seconds between feedback from same IP
@@ -24,11 +24,16 @@ export default async function handler(req, res) {
   if (origin.endsWith('.vercel.app') || origin.startsWith('http://localhost')) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Auth check
+  const auth = await requireAuth(req);
+  if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+  const { user: authUser, supabase: authSupabase } = auth;
 
   // Rate limiting
   const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
@@ -56,43 +61,28 @@ export default async function handler(req, res) {
     ip,
   };
 
-  // Try Supabase if configured
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-
-  if (supabaseUrl && supabaseKey) {
+  if (authSupabase) {
     try {
-      const { createClient } = await import('@supabase/supabase-js');
-      const supabase = createClient(supabaseUrl, supabaseKey);
+      const commentParts = [];
+      if (feedbackRecord.user_question) commentParts.push(`Q: ${feedbackRecord.user_question}`);
+      if (feedbackRecord.message_preview) commentParts.push(`A: ${feedbackRecord.message_preview}`);
+      if (feedbackRecord.role) commentParts.push(`Role: ${feedbackRecord.role}`);
+      if (feedbackRecord.building) commentParts.push(`Building: ${feedbackRecord.building}`);
 
-      // Resolve beta user
-      const betaUserId = await getOrCreateBetaUser(supabase, feedbackRecord.user, feedbackRecord.role);
+      const { error } = await authSupabase
+        .from('feedback_events')
+        .insert({
+          user_id: authUser.id,
+          conversation_id: conversationId || null,
+          rating: RATING_MAP[feedbackRecord.type],
+          comment: commentParts.join(' | ') || null,
+        });
 
-      if (betaUserId) {
-        // Build comment from context
-        const commentParts = [];
-        if (feedbackRecord.user_question) commentParts.push(`Q: ${feedbackRecord.user_question}`);
-        if (feedbackRecord.message_preview) commentParts.push(`A: ${feedbackRecord.message_preview}`);
-        if (feedbackRecord.role) commentParts.push(`Role: ${feedbackRecord.role}`);
-        if (feedbackRecord.building) commentParts.push(`Building: ${feedbackRecord.building}`);
-
-        const { error } = await supabase
-          .from('feedback_events')
-          .insert({
-            user_id: betaUserId,
-            conversation_id: conversationId || null,
-            rating: RATING_MAP[feedbackRecord.type],
-            comment: commentParts.join(' | ') || null,
-          });
-
-        if (error) {
-          console.warn('[feedback] Supabase insert failed, falling back to log:', error.message);
-        } else {
-          console.log(JSON.stringify({ event: 'feedback_saved', source: 'supabase', ...feedbackRecord }));
-          return res.status(200).json({ saved: true, source: 'supabase' });
-        }
+      if (error) {
+        console.warn('[feedback] Supabase insert failed, falling back to log:', error.message);
       } else {
-        console.warn('[feedback] Could not resolve beta user, falling back to log');
+        console.log(JSON.stringify({ event: 'feedback_saved', source: 'supabase', ...feedbackRecord }));
+        return res.status(200).json({ saved: true, source: 'supabase' });
       }
     } catch (err) {
       console.warn('[feedback] Supabase unavailable, falling back to log:', err.message);

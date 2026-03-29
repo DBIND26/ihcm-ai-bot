@@ -4,16 +4,22 @@ import { getActiveBuildings } from '../v2_definitive/src/buildings.js';
 import { WORKFLOWS, getWorkflowsForRole } from '../v2_definitive/src/workflows.js';
 import { loadMessages, saveMessages, clearMessages } from './storage.js';
 import { addSurvey, addEvent, getBuildingHistoryContext, getBuildingHistory } from './buildingHistory.js';
-import AccessGate, { ROLE_OPTIONS } from './components/AccessGate.jsx';
+import AccessGate from './components/AccessGate.jsx';
 import MessageList from './components/MessageList.jsx';
 import BuildingHistoryPanel from './components/BuildingHistoryPanel.jsx';
 import ConversationHistoryPanel from './components/ConversationHistoryPanel.jsx';
-
-// ROLE_OPTIONS and getUserAccess are now in components/AccessGate.jsx
+import { supabase } from './lib/supabase.js';
 
 export default function App() {
-  // Access gate — session holds: { userName, selectedRole, allowedRoles, allowedBuildings }
+  // Access gate — session holds Supabase auth data
   const [userSession, setUserSession] = useState(null);
+
+  // Helper: build auth headers for API calls
+  const authHeaders = (extra = {}) => ({
+    'Content-Type': 'application/json',
+    ...(userSession?.accessToken ? { 'Authorization': `Bearer ${userSession.accessToken}` } : {}),
+    ...extra,
+  });
 
   // Feedback state: { [messageIndex]: 'useful' | 'not_useful' | 'wrong' }
   const [feedback, setFeedback] = useState({});
@@ -82,13 +88,13 @@ export default function App() {
 
     // Try server first, fall back to localStorage
     const loadFromServer = async () => {
-      if (!userSession?.userName) return false;
+      if (!userSession?.accessToken) return false;
       try {
-        const params = new URLSearchParams({ user: userSession.userName, role: activeRoleId });
+        const params = new URLSearchParams({ role: activeRoleId });
         if (activeBuildingId && activeBuildingId !== 'none') {
           params.set('building', activeBuildingId);
         }
-        const res = await fetch(`/api/conversations?${params}`);
+        const res = await fetch(`/api/conversations?${params}`, { headers: authHeaders() });
         if (!res.ok) return false;
         const data = await res.json();
         setConversationList(data.conversations || []);
@@ -96,7 +102,7 @@ export default function App() {
         // Auto-load the most recent conversation
         if (data.conversations?.length > 0) {
           const latest = data.conversations[0];
-          const msgRes = await fetch(`/api/conversations?id=${latest.conversation_id}&user=${encodeURIComponent(userSession.userName)}`);
+          const msgRes = await fetch(`/api/conversations?id=${latest.conversation_id}`, { headers: authHeaders() });
           if (msgRes.ok) {
             const msgData = await msgRes.json();
             if (msgData.messages?.length > 0) {
@@ -308,7 +314,7 @@ export default function App() {
       const text = await file.text();
       const response = await fetch('/api/ingest-census', {
         method: 'POST',
-        headers: { 'Content-Type': 'text/plain' },
+        headers: authHeaders({ 'Content-Type': 'text/plain' }),
         body: text,
       });
 
@@ -341,11 +347,7 @@ export default function App() {
     try {
       const res = await fetch('/api/ingest-knowledge', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-IHCM-User': userSession?.userName || '',
-          'X-IHCM-Session-Token': userSession?.sessionToken || '',
-        },
+        headers: authHeaders(),
         body: JSON.stringify({
           title: playbookData.title.trim(),
           source_type: playbookData.source_type,
@@ -373,10 +375,7 @@ export default function App() {
   const fetchKnowledgeList = async () => {
     try {
       const res = await fetch('/api/ingest-knowledge?status=all', {
-        headers: {
-          'X-IHCM-User': userSession?.userName || '',
-          'X-IHCM-Session-Token': userSession?.sessionToken || '',
-        },
+        headers: authHeaders(),
       });
       if (res.ok) {
         const data = await res.json();
@@ -392,11 +391,7 @@ export default function App() {
     try {
       const res = await fetch('/api/ingest-knowledge', {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-IHCM-User': userSession?.userName || '',
-          'X-IHCM-Session-Token': userSession?.sessionToken || '',
-        },
+        headers: authHeaders(),
         body: JSON.stringify({ source_id: sourceId, status: newStatus }),
       });
       if (res.ok) {
@@ -465,7 +460,7 @@ export default function App() {
       // Call API
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({
           botId: activeRoleId,
           buildingId: activeBuildingId,
@@ -474,7 +469,6 @@ export default function App() {
           workflowId: activeWorkflowId || null,
           documentContext: documentContext || undefined,
           historyContext: historyContext || undefined,
-          userName: userSession?.userName || undefined,
           conversationId: conversationId || undefined,
         })
       });
@@ -548,7 +542,7 @@ export default function App() {
   // Load a specific conversation from server
   const handleLoadConversation = async (conv) => {
     try {
-      const res = await fetch(`/api/conversations?id=${conv.conversation_id}&user=${encodeURIComponent(userSession?.userName)}`);
+      const res = await fetch(`/api/conversations?id=${conv.conversation_id}`, { headers: authHeaders() });
       if (!res.ok) throw new Error('Failed to load');
       const data = await res.json();
       setMessages(data.messages || []);
@@ -563,14 +557,14 @@ export default function App() {
 
   // Refresh conversation list from server
   const refreshConversationList = async () => {
-    if (!userSession?.userName) return;
+    if (!userSession?.accessToken) return;
     setLoadingConversations(true);
     try {
-      const params = new URLSearchParams({ user: userSession.userName, role: activeRoleId });
+      const params = new URLSearchParams({ role: activeRoleId });
       if (activeBuildingId && activeBuildingId !== 'none') {
         params.set('building', activeBuildingId);
       }
-      const res = await fetch(`/api/conversations?${params}`);
+      const res = await fetch(`/api/conversations?${params}`, { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         setConversationList(data.conversations || []);
@@ -608,7 +602,7 @@ export default function App() {
     // POST to feedback API (fire-and-forget, don't block UI)
     fetch('/api/feedback', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({ ...feedbackData, conversationId: conversationId || undefined }),
     }).catch(err => {
       console.warn('[IHCM] Failed to send feedback to API:', err);
@@ -691,11 +685,11 @@ export default function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {userName && (
             <span style={{ fontSize: '13px', color: '#6b7280' }}>
-              {userName}{userSession.selectedRole ? ` (${ROLE_OPTIONS.find(r => r.id === userSession.selectedRole)?.label || userSession.selectedRole})` : ''}
+              {userName}{userSession.appRole ? ` (${userSession.appRole.replace(/_/g, ' ')})` : ''}
             </span>
           )}
           <button
-            onClick={() => { sessionStorage.removeItem('ihcm_session'); setUserSession(null); }}
+            onClick={async () => { await supabase.auth.signOut(); setUserSession(null); }}
             style={{
               padding: '4px 10px', borderRadius: '4px', border: '1px solid #d1d5db',
               backgroundColor: 'transparent', cursor: 'pointer', fontSize: '12px',

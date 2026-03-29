@@ -1,114 +1,101 @@
-import React, { useState, useEffect } from 'react';
-import { getActiveBuildings } from '../../v2_definitive/src/buildings.js';
-
-export const ROLE_OPTIONS = [
-  { id: 'don', label: 'Director of Nursing (DON)', needsBuilding: true },
-  { id: 'mds', label: 'MDS Coordinator', needsBuilding: true },
-  { id: 'billing', label: 'Billing & RCM', needsBuilding: false },
-  { id: 'admin', label: 'Facility Administrator', needsBuilding: true },
-  { id: 'regional', label: 'Regional Operations', needsBuilding: false },
-];
-
-export function getUserAccess(userName, selectedRole, selectedBuildings) {
-  const nameLower = (userName || '').toLowerCase().trim();
-
-  if (nameLower === 'dov' || nameLower === 'dov braun' || nameLower.includes('dbraun')) {
-    return {
-      allowedRoles: ['mds', 'don', 'billing', 'admin', 'regional'],
-      allowedBuildings: null,
-    };
-  }
-
-  if (selectedRole === 'regional') {
-    return {
-      allowedRoles: ['mds', 'don', 'admin', 'regional'],
-      allowedBuildings: null,
-    };
-  }
-
-  if (selectedRole === 'billing') {
-    return {
-      allowedRoles: ['billing'],
-      allowedBuildings: null,
-    };
-  }
-
-  return {
-    allowedRoles: [selectedRole],
-    allowedBuildings: selectedBuildings.length > 0 ? selectedBuildings : null,
-  };
-}
+import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase.js';
 
 export default function AccessGate({ onAuthenticated }) {
-  const [name, setName] = useState('');
-  const [code, setCode] = useState('');
-  const [selectedRole, setSelectedRole] = useState('');
-  const [selectedBuildings, setSelectedBuildings] = useState([]);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [checking, setChecking] = useState(true);
+  const [loading, setLoading] = useState(false);
 
-  const activeBuildings = getActiveBuildings();
-  const currentRoleOption = ROLE_OPTIONS.find(r => r.id === selectedRole);
-
+  // Check for existing session on mount
   useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem('ihcm_session');
-      if (saved) {
-        const session = JSON.parse(saved);
-        if (session.userName && session.allowedRoles && session.sessionToken) {
-          onAuthenticated(session);
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.user) {
+        const profile = await fetchProfile(session.user.id);
+        if (profile) {
+          onAuthenticated(buildSession(session, profile));
           return;
         }
-        sessionStorage.removeItem('ihcm_session');
       }
-    } catch (err) {
-      console.warn('[IHCM] Session recovery failed:', err);
-    }
-    setChecking(false);
+      setChecking(false);
+    });
+
+    // Listen for auth state changes (token refresh, logout)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') {
+        // handled by App.jsx
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  const toggleBuilding = (buildingId) => {
-    setSelectedBuildings(prev =>
-      prev.includes(buildingId)
-        ? prev.filter(b => b !== buildingId)
-        : [...prev, buildingId]
-    );
-  };
+  async function fetchProfile(userId) {
+    const { data, error } = await supabase
+      .from('user_profiles')
+      .select('app_role, global_access_level, full_name, allowed_bot_roles, is_active')
+      .eq('user_id', userId)
+      .single();
+
+    if (error || !data?.is_active) return null;
+    return data;
+  }
+
+  function buildSession(session, profile) {
+    return {
+      userId: session.user.id,
+      email: session.user.email,
+      userName: profile.full_name || session.user.email,
+      appRole: profile.app_role,
+      globalAccess: profile.global_access_level,
+      allowedRoles: profile.allowed_bot_roles || [],
+      allowedBuildings: null, // null = all (will use global_access_level + user_facility_access later)
+      accessToken: session.access_token,
+    };
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
 
-    if (!name.trim()) { setError('Please enter your name'); return; }
-    if (!code.trim()) { setError('Please enter the access code'); return; }
-    if (!selectedRole) { setError('Please select your role'); return; }
-    if (currentRoleOption?.needsBuilding && selectedBuildings.length === 0) {
-      setError('Please select your building(s)');
-      return;
-    }
+    if (!email.trim()) { setError('Please enter your email'); return; }
+    if (!password.trim()) { setError('Please enter your password'); return; }
+
+    setLoading(true);
 
     try {
-      const res = await fetch('/api/verify-access', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code.trim(), name: name.trim() }),
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password.trim(),
       });
-      const data = await res.json();
-      if (data.valid) {
-        const access = getUserAccess(name.trim(), selectedRole, selectedBuildings);
-        const session = {
-          userName: name.trim(),
-          selectedRole,
-          sessionToken: data.sessionToken,
-          ...access,
-        };
-        sessionStorage.setItem('ihcm_session', JSON.stringify(session));
-        onAuthenticated(session);
-      } else {
-        setError('Invalid access code');
+
+      if (authError) {
+        setError(authError.message === 'Invalid login credentials'
+          ? 'Invalid email or password'
+          : authError.message);
+        setLoading(false);
+        return;
       }
-    } catch {
+
+      if (!data.session) {
+        setError('Login failed — no session returned');
+        setLoading(false);
+        return;
+      }
+
+      const profile = await fetchProfile(data.user.id);
+      if (!profile) {
+        setError('Account exists but profile not configured. Contact your administrator.');
+        await supabase.auth.signOut();
+        setLoading(false);
+        return;
+      }
+
+      onAuthenticated(buildSession(data.session, profile));
+    } catch (err) {
       setError('Connection error — try again');
+      setLoading(false);
     }
   };
 
@@ -139,65 +126,21 @@ export default function AccessGate({ onAuthenticated }) {
           IHCM AI Bot
         </h1>
         <p style={{ margin: '0 0 20px 0', fontSize: '14px', color: '#6b7280' }}>
-          Sign in to get started
+          Sign in with your IHCM account
         </p>
 
-        <input type="text" value={name} onChange={e => setName(e.target.value)}
-          placeholder="Your name" autoFocus style={inputStyle} />
-        <input type="password" value={code} onChange={e => setCode(e.target.value)}
-          placeholder="Access code" style={inputStyle} />
-
-        <div style={{ textAlign: 'left', marginBottom: '12px' }}>
-          <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '8px' }}>
-            Your role
-          </label>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {ROLE_OPTIONS.map(role => (
-              <label key={role.id} style={{
-                display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px',
-                borderRadius: '6px', cursor: 'pointer', fontSize: '14px',
-                border: selectedRole === role.id ? '2px solid #2563eb' : '1px solid #d1d5db',
-                backgroundColor: selectedRole === role.id ? '#eff6ff' : 'white',
-              }}>
-                <input type="radio" name="role" value={role.id}
-                  checked={selectedRole === role.id}
-                  onChange={() => { setSelectedRole(role.id); setSelectedBuildings([]); }}
-                  style={{ accentColor: '#2563eb' }} />
-                {role.label}
-              </label>
-            ))}
-          </div>
-        </div>
-
-        {currentRoleOption?.needsBuilding && (
-          <div style={{ textAlign: 'left', marginBottom: '12px' }}>
-            <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '8px' }}>
-              Your building(s)
-            </label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-              {activeBuildings.map(b => (
-                <label key={b.id} style={{
-                  display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px',
-                  borderRadius: '6px', cursor: 'pointer', fontSize: '13px',
-                  border: selectedBuildings.includes(b.id) ? '2px solid #2563eb' : '1px solid #d1d5db',
-                  backgroundColor: selectedBuildings.includes(b.id) ? '#eff6ff' : 'white',
-                }}>
-                  <input type="checkbox" checked={selectedBuildings.includes(b.id)}
-                    onChange={() => toggleBuilding(b.id)} style={{ accentColor: '#2563eb' }} />
-                  {b.shortName || b.label}
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
+        <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+          placeholder="Email address" autoFocus autoComplete="email" style={inputStyle} />
+        <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+          placeholder="Password" autoComplete="current-password" style={inputStyle} />
 
         {error && <p style={{ color: '#dc2626', fontSize: '13px', margin: '0 0 12px 0' }}>{error}</p>}
-        <button type="submit" style={{
+        <button type="submit" disabled={loading} style={{
           width: '100%', padding: '12px', borderRadius: '8px', border: 'none',
-          backgroundColor: '#2563eb', color: 'white', fontSize: '15px',
-          fontWeight: '600', cursor: 'pointer'
+          backgroundColor: loading ? '#93c5fd' : '#2563eb', color: 'white', fontSize: '15px',
+          fontWeight: '600', cursor: loading ? 'not-allowed' : 'pointer'
         }}>
-          Enter
+          {loading ? 'Signing in...' : 'Sign In'}
         </button>
       </form>
     </div>

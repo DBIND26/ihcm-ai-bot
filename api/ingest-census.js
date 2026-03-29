@@ -24,16 +24,22 @@ const FACILITY_MAP = {
 // Which payer types to track
 const PAYER_TYPES = ['Medicare A', 'Medicaid Pending', 'Private', 'Managed Care', 'Medicaid', 'Other', 'Leave', 'Unassigned'];
 
+import { requireAuth } from './lib/requireAuth.js';
+
 export default async function handler(req, res) {
   // CORS
   const origin = req.headers.origin || '';
   if (origin.endsWith('.vercel.app') || origin.startsWith('http://localhost')) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Auth check
+  const auth = await requireAuth(req);
+  if (!auth) return res.status(401).json({ error: 'Unauthorized' });
 
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY;

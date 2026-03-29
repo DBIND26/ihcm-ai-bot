@@ -1,66 +1,45 @@
 // ============================================================================
 // Conversations endpoint — GET /api/conversations
 // ============================================================================
-// Lists conversations and loads messages for a specific conversation.
+// Lists conversations and loads messages. Requires Supabase Auth JWT.
 //
 // Query params:
-//   ?user=<userName>                           → list conversations for user
-//   ?user=<userName>&building=<buildingId>     → filter by building
-//   ?id=<conversationId>                       → load messages for a conversation
-//
-// Returns:
-//   List mode:  { conversations: [{ conversation_id, title, facility_code, status, updated_at, message_count, last_message }] }
-//   Detail mode: { conversation: { conversation_id, title, ... }, messages: [{ role, content }] }
+//   ?role=<botId>&building=<slug>  → list conversations for authenticated user
+//   ?id=<conversationId>           → load messages for a specific conversation
 
-import { getOrCreateBetaUser } from './lib/betaUser.js';
+import { requireAuth } from './lib/requireAuth.js';
 
 export default async function handler(req, res) {
-  // CORS
   const origin = req.headers.origin || '';
   if (origin.endsWith('.vercel.app') || origin.startsWith('http://localhost')) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  // Auth check
+  const auth = await requireAuth(req);
+  if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+  const { user, supabase } = auth;
+  const userId = user.id;
 
-  if (!supabaseUrl || !supabaseKey) {
-    return res.status(503).json({ error: 'Supabase not configured' });
-  }
-
-  const { createClient } = await import('@supabase/supabase-js');
-  const supabase = createClient(supabaseUrl, supabaseKey);
-
-  // Parse query params
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const conversationId = url.searchParams.get('id');
-  const userName = url.searchParams.get('user');
   const buildingId = url.searchParams.get('building');
   const roleId = url.searchParams.get('role');
 
   try {
     // ── Detail mode: load a specific conversation's messages ──
     if (conversationId) {
-      // Ownership check: require user param and verify the conversation belongs to them
-      if (!userName) {
-        return res.status(400).json({ error: 'Missing user parameter for ownership verification' });
-      }
-      const betaUserId = await getOrCreateBetaUser(supabase, userName);
-      if (!betaUserId) {
-        return res.status(403).json({ error: 'Unknown user' });
-      }
-
-      // Verify conversation ownership before loading messages
+      // Verify ownership
       const { data: conv, error: convError } = await supabase
         .from('conversations')
         .select('conversation_id')
         .eq('conversation_id', conversationId)
-        .eq('user_id', betaUserId)
+        .eq('user_id', userId)
         .single();
 
       if (convError || !conv) {
@@ -83,15 +62,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ── List mode: list conversations for a user ──
-    if (!userName) {
-      return res.status(400).json({ error: 'Missing user or id parameter' });
-    }
-
-    const betaUserId = await getOrCreateBetaUser(supabase, userName);
-    if (!betaUserId) {
-      return res.status(200).json({ conversations: [] });
-    }
+    // ── List mode: list conversations for authenticated user ──
 
     // Resolve building slug to facility UUID
     let facilityId = null;
@@ -104,29 +75,16 @@ export default async function handler(req, res) {
       facilityId = fac?.facility_id || null;
     }
 
-    // Build query
     let query = supabase
       .from('conversations')
-      .select(`
-        conversation_id,
-        title,
-        facility_id,
-        workflow_type,
-        status,
-        updated_at,
-        created_at
-      `)
-      .eq('user_id', betaUserId)
+      .select('conversation_id, title, facility_id, workflow_type, bot_id, status, updated_at, created_at')
+      .eq('user_id', userId)
       .eq('status', 'active')
       .order('updated_at', { ascending: false })
       .limit(20);
 
-    if (facilityId) {
-      query = query.eq('facility_id', facilityId);
-    }
-    if (roleId) {
-      query = query.eq('bot_id', roleId);
-    }
+    if (facilityId) query = query.eq('facility_id', facilityId);
+    if (roleId) query = query.eq('bot_id', roleId);
 
     const { data: conversations, error } = await query;
 
@@ -135,7 +93,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Failed to list conversations' });
     }
 
-    // Get message counts and last message preview for each conversation
+    // Get message counts and last message preview
     const enriched = await Promise.all((conversations || []).map(async (conv) => {
       const { data: msgs } = await supabase
         .from('conversation_messages')
@@ -154,6 +112,7 @@ export default async function handler(req, res) {
         conversation_id: conv.conversation_id,
         title: conv.title,
         facility_id: conv.facility_id,
+        bot_id: conv.bot_id,
         workflow_type: conv.workflow_type,
         status: conv.status,
         updated_at: conv.updated_at,
