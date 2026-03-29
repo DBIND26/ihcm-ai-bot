@@ -18,17 +18,31 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { code } = req.body || {};
+  const { code, name } = req.body || {};
   const accessCode = process.env.BETA_ACCESS_CODE;
 
-  // If no access code is configured, allow everyone (dev mode)
+  // If no access code is configured, require it anyway (no open access)
   if (!accessCode) {
-    return res.status(200).json({ valid: true });
+    console.warn('[verify-access] BETA_ACCESS_CODE not set — rejecting all access');
+    return res.status(401).json({ valid: false, error: 'Access not configured. Set BETA_ACCESS_CODE in environment.' });
   }
 
   if (typeof code !== 'string' || code.trim() !== accessCode) {
+    console.log(JSON.stringify({
+      event: 'access_denied',
+      name: name || null,
+      ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress,
+      timestamp: new Date().toISOString(),
+    }));
     return res.status(401).json({ valid: false, error: 'Invalid access code' });
   }
+
+  console.log(JSON.stringify({
+    event: 'access_granted',
+    name: name || null,
+    ip: req.headers['x-forwarded-for'] || req.socket?.remoteAddress,
+    timestamp: new Date().toISOString(),
+  }));
 
   return res.status(200).json({ valid: true });
 }

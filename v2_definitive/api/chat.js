@@ -454,7 +454,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { botId, buildingId, isDraft, messages, workflowId, documentContext, historyContext } = req.body;
+    const { botId, buildingId, isDraft, messages, workflowId, documentContext, historyContext, userName } = req.body;
     const requestId = crypto.randomUUID?.() || `req_${Date.now()}`;
 
     // Validate botId
@@ -513,6 +513,7 @@ export default async function handler(req, res) {
       inputTokens: response.usage?.input_tokens,
       outputTokens: response.usage?.output_tokens,
       latencyMs: latency,
+      userName: userName || null,
       supabaseConnected: !!supabase,
       hasBuildingContext: !!buildingContext,
       timestamp: new Date().toISOString(),

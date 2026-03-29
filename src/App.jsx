@@ -12,48 +12,44 @@ import {
 
 // ── Access Gate Component ──
 function AccessGate({ onAuthenticated }) {
+  const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [error, setError] = useState(null);
   const [checking, setChecking] = useState(true);
 
-  // Check if already authenticated
+  // Check if already authenticated (saved in sessionStorage)
   useEffect(() => {
-    const saved = sessionStorage.getItem('ihcm_access');
-    if (saved === 'granted') {
-      onAuthenticated();
+    const savedUser = sessionStorage.getItem('ihcm_user');
+    if (savedUser) {
+      onAuthenticated(savedUser);
       return;
     }
-    // Check if access code is even required
-    fetch('/api/verify-access', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: '' }),
-    })
-      .then(r => r.json())
-      .then(data => {
-        if (data.valid) {
-          sessionStorage.setItem('ihcm_access', 'granted');
-          onAuthenticated();
-        } else {
-          setChecking(false);
-        }
-      })
-      .catch(() => setChecking(false));
+    setChecking(false);
   }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
+
+    if (!name.trim()) {
+      setError('Please enter your name');
+      return;
+    }
+    if (!code.trim()) {
+      setError('Please enter the access code');
+      return;
+    }
+
     try {
       const res = await fetch('/api/verify-access', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code.trim() }),
+        body: JSON.stringify({ code: code.trim(), name: name.trim() }),
       });
       const data = await res.json();
       if (data.valid) {
-        sessionStorage.setItem('ihcm_access', 'granted');
-        onAuthenticated();
+        sessionStorage.setItem('ihcm_user', name.trim());
+        onAuthenticated(name.trim());
       } else {
         setError('Invalid access code');
       }
@@ -83,14 +79,25 @@ function AccessGate({ onAuthenticated }) {
           IHCM AI Bot
         </h1>
         <p style={{ margin: '0 0 24px 0', fontSize: '14px', color: '#6b7280' }}>
-          Enter your team access code
+          Sign in with your name and team access code
         </p>
+        <input
+          type="text"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="Your name (e.g. Jane Smith)"
+          autoFocus
+          style={{
+            width: '100%', padding: '12px 16px', borderRadius: '8px',
+            border: '1px solid #d1d5db', fontSize: '16px', fontFamily: 'inherit',
+            boxSizing: 'border-box', marginBottom: '12px'
+          }}
+        />
         <input
           type="password"
           value={code}
           onChange={e => setCode(e.target.value)}
           placeholder="Access code"
-          autoFocus
           style={{
             width: '100%', padding: '12px 16px', borderRadius: '8px',
             border: '1px solid #d1d5db', fontSize: '16px', fontFamily: 'inherit',
@@ -113,6 +120,7 @@ function AccessGate({ onAuthenticated }) {
 export default function App() {
   // Access gate
   const [authenticated, setAuthenticated] = useState(false);
+  const [userName, setUserName] = useState('');
 
   // Feedback state: { [messageIndex]: 'useful' | 'not_useful' | 'wrong' }
   const [feedback, setFeedback] = useState({});
@@ -400,6 +408,7 @@ export default function App() {
           workflowId: activeWorkflowId || null,
           documentContext: documentContext || undefined,
           historyContext: historyContext || undefined,
+          userName: userName || undefined,
         })
       });
 
@@ -453,6 +462,7 @@ export default function App() {
       const feedbackLog = JSON.parse(localStorage.getItem('ihcm_feedback') || '[]');
       feedbackLog.push({
         type,
+        user: userName,
         role: activeRoleId,
         building: activeBuildingId,
         messageIndex: msgIndex,
@@ -530,7 +540,7 @@ export default function App() {
 
   // Access gate
   if (!authenticated) {
-    return <AccessGate onAuthenticated={() => setAuthenticated(true)} />;
+    return <AccessGate onAuthenticated={(name) => { setAuthenticated(true); setUserName(name); }} />;
   }
 
   return (
@@ -554,7 +564,7 @@ export default function App() {
           boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
         }}
       >
-        <div className="ihcm-header-content">
+        <div className="ihcm-header-content" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h1 className="ihcm-header-title" style={{ margin: '0 0 4px 0', fontSize: '20px', fontWeight: '600' }}>
             IHCM AI Bot
           </h1>
@@ -564,6 +574,23 @@ export default function App() {
           >
             {activeRole?.name} {activeBuildingId !== 'none' && `• ${activeBuildings.find(b => b.id === activeBuildingId)?.label || ''}`}
           </p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {userName && (
+            <span style={{ fontSize: '13px', color: '#6b7280' }}>
+              {userName}
+            </span>
+          )}
+          <button
+            onClick={() => { sessionStorage.removeItem('ihcm_user'); setAuthenticated(false); setUserName(''); }}
+            style={{
+              padding: '4px 10px', borderRadius: '4px', border: '1px solid #d1d5db',
+              backgroundColor: 'transparent', cursor: 'pointer', fontSize: '12px',
+              color: '#6b7280'
+            }}
+          >
+            Sign out
+          </button>
         </div>
       </header>
 
