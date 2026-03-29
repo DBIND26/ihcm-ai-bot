@@ -918,7 +918,6 @@ export const WORKFLOWS = {
     },
   },
   // ── Hospitalization Review (shared across DON, Admin, MDS, Regional) ──
-  // HIDDEN — set hidden: false to enable in UI
 
   hospitalization_review_don: {
     id: 'hospitalization_review_don',
@@ -929,23 +928,56 @@ export const WORKFLOWS = {
     requiredInputs: [
       { name: 'transferDate', label: 'Transfer Date', type: 'date', placeholder: '' },
       { name: 'primaryDiagnosis', label: 'Primary Diagnosis / Reason for Transfer', type: 'text', placeholder: 'e.g. CHF exacerbation, fall with hip fracture, sepsis' },
-      { name: 'diagnosisCategory', label: 'Diagnosis Category', type: 'text', placeholder: 'cardiac, respiratory, infection, fall, gi, neuro, dehydration, medication, wound, behavioral, other' },
+      { name: 'diagnosisCategory', label: 'Diagnosis Category', type: 'select', placeholder: 'Select category...', options: [
+        { value: 'cardiac', label: 'Cardiac (CHF, chest pain, arrhythmia)' },
+        { value: 'respiratory', label: 'Respiratory (pneumonia, COPD, aspiration)' },
+        { value: 'infection', label: 'Infection (UTI, sepsis, cellulitis)' },
+        { value: 'fall', label: 'Fall (with/without fracture)' },
+        { value: 'gi', label: 'GI (bleeding, obstruction, N/V)' },
+        { value: 'neuro', label: 'Neuro (stroke, seizure, altered mental status)' },
+        { value: 'dehydration', label: 'Dehydration' },
+        { value: 'medication', label: 'Medication-related (adverse reaction, toxicity)' },
+        { value: 'wound', label: 'Wound-related (dehiscence, infection)' },
+        { value: 'behavioral', label: 'Behavioral/Psych (agitation, self-harm)' },
+        { value: 'other', label: 'Other' },
+      ]},
     ],
     optionalInputs: [
-      { name: 'transferTimeCategory', label: 'Time of Transfer', type: 'text', placeholder: 'business_hours, evening, night, weekend' },
+      { name: 'transferTimeCategory', label: 'Time of Transfer', type: 'select', placeholder: 'Select...', options: [
+        { value: 'business_hours', label: 'Business Hours' },
+        { value: 'evening', label: 'Evening' },
+        { value: 'night', label: 'Night' },
+        { value: 'weekend', label: 'Weekend' },
+      ]},
       { name: 'daysSinceAdmission', label: 'Days Since SNF Admission', type: 'text', placeholder: 'e.g. 5' },
-      { name: 'payerType', label: 'Payer Type', type: 'text', placeholder: 'medicare, managed_care, medicaid, private' },
-      { name: 'presentOnAdmission', label: 'Condition Present on Admission?', type: 'text', placeholder: 'yes or no' },
-      { name: 'physicianNotified', label: 'Physician Notified Before Transfer?', type: 'text', placeholder: 'yes or no' },
-      { name: 'conditionChangeDocumented', label: 'Change in Condition Documented?', type: 'text', placeholder: 'yes or no' },
-      { name: 'interactToolUsed', label: 'INTERACT Tool Used?', type: 'text', placeholder: 'yes or no' },
-      { name: 'readmissionFlag', label: '30-Day Readmission?', type: 'text', placeholder: 'yes or no' },
-      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: 'Any relevant clinical or operational context' },
+      { name: 'payerType', label: 'Payer Type', type: 'select', placeholder: 'Select...', options: [
+        { value: 'medicare', label: 'Medicare' },
+        { value: 'managed_care', label: 'Managed Care' },
+        { value: 'medicaid', label: 'Medicaid' },
+        { value: 'private', label: 'Private' },
+        { value: 'other', label: 'Other' },
+      ]},
+      { name: 'presentOnAdmission', label: 'Condition Present on Admission?', type: 'select', placeholder: 'Select...', options: [
+        { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' },
+      ]},
+      { name: 'physicianNotified', label: 'Physician Notified Before Transfer?', type: 'select', placeholder: 'Select...', options: [
+        { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' },
+      ]},
+      { name: 'conditionChangeDocumented', label: 'Change in Condition Documented?', type: 'select', placeholder: 'Select...', options: [
+        { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' },
+      ]},
+      { name: 'interactToolUsed', label: 'INTERACT Tool Used?', type: 'select', placeholder: 'Select...', options: [
+        { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' },
+      ]},
+      { name: 'readmissionFlag', label: '30-Day Readmission?', type: 'select', placeholder: 'Select...', options: [
+        { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' },
+      ]},
+      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: 'Any relevant clinical or operational context — do not include patient names or identifiers' },
     ],
     missingInfoQuestions: [
       'What was the date of the hospital transfer?',
       'What was the primary diagnosis or reason for transfer?',
-      'What category does this fall under? (cardiac, respiratory, infection, fall, etc.)',
+      'What category does this fall under?',
     ],
     outputSections: [
       'Classification (Avoidable / Possibly Avoidable / Unavoidable)',
@@ -994,16 +1026,35 @@ export const WORKFLOWS = {
     requiredInputs: [
       { name: 'transferDate', label: 'Transfer Date', type: 'date', placeholder: '' },
       { name: 'primaryDiagnosis', label: 'Primary Diagnosis / Reason for Transfer', type: 'text', placeholder: 'e.g. CHF exacerbation, fall with hip fracture' },
-      { name: 'diagnosisCategory', label: 'Diagnosis Category', type: 'text', placeholder: 'cardiac, respiratory, infection, fall, gi, neuro, dehydration, medication, wound, behavioral, other' },
+      { name: 'diagnosisCategory', label: 'Diagnosis Category', type: 'select', placeholder: 'Select category...', options: [
+        { value: 'cardiac', label: 'Cardiac' }, { value: 'respiratory', label: 'Respiratory' },
+        { value: 'infection', label: 'Infection' }, { value: 'fall', label: 'Fall' },
+        { value: 'gi', label: 'GI' }, { value: 'neuro', label: 'Neuro' },
+        { value: 'dehydration', label: 'Dehydration' }, { value: 'medication', label: 'Medication' },
+        { value: 'wound', label: 'Wound' }, { value: 'behavioral', label: 'Behavioral' },
+        { value: 'other', label: 'Other' },
+      ]},
     ],
     optionalInputs: [
-      { name: 'transferTimeCategory', label: 'Time of Transfer', type: 'text', placeholder: 'business_hours, evening, night, weekend' },
+      { name: 'transferTimeCategory', label: 'Time of Transfer', type: 'select', placeholder: 'Select...', options: [
+        { value: 'business_hours', label: 'Business Hours' }, { value: 'evening', label: 'Evening' },
+        { value: 'night', label: 'Night' }, { value: 'weekend', label: 'Weekend' },
+      ]},
       { name: 'daysSinceAdmission', label: 'Days Since SNF Admission', type: 'text', placeholder: 'e.g. 5' },
-      { name: 'payerType', label: 'Payer Type', type: 'text', placeholder: 'medicare, managed_care, medicaid, private' },
-      { name: 'physicianNotified', label: 'Physician Notified?', type: 'text', placeholder: 'yes or no' },
-      { name: 'interactToolUsed', label: 'INTERACT Tool Used?', type: 'text', placeholder: 'yes or no' },
-      { name: 'readmissionFlag', label: '30-Day Readmission?', type: 'text', placeholder: 'yes or no' },
-      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: '' },
+      { name: 'payerType', label: 'Payer Type', type: 'select', placeholder: 'Select...', options: [
+        { value: 'medicare', label: 'Medicare' }, { value: 'managed_care', label: 'Managed Care' },
+        { value: 'medicaid', label: 'Medicaid' }, { value: 'private', label: 'Private' },
+      ]},
+      { name: 'physicianNotified', label: 'Physician Notified?', type: 'select', placeholder: 'Select...', options: [
+        { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' },
+      ]},
+      { name: 'interactToolUsed', label: 'INTERACT Tool Used?', type: 'select', placeholder: 'Select...', options: [
+        { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' },
+      ]},
+      { name: 'readmissionFlag', label: '30-Day Readmission?', type: 'select', placeholder: 'Select...', options: [
+        { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' },
+      ]},
+      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: 'Do not include patient names or identifiers' },
     ],
     missingInfoQuestions: [],
     outputSections: ['Classification', 'Reasoning', 'Root Causes', 'Prevention', 'QI Actions'],
@@ -1035,12 +1086,21 @@ export const WORKFLOWS = {
     requiredInputs: [
       { name: 'transferDate', label: 'Transfer Date', type: 'date', placeholder: '' },
       { name: 'primaryDiagnosis', label: 'Primary Diagnosis / Reason', type: 'text', placeholder: '' },
-      { name: 'diagnosisCategory', label: 'Category', type: 'text', placeholder: 'cardiac, respiratory, infection, fall, gi, neuro, dehydration, medication, wound, behavioral, other' },
+      { name: 'diagnosisCategory', label: 'Category', type: 'select', placeholder: 'Select...', options: [
+        { value: 'cardiac', label: 'Cardiac' }, { value: 'respiratory', label: 'Respiratory' },
+        { value: 'infection', label: 'Infection' }, { value: 'fall', label: 'Fall' },
+        { value: 'gi', label: 'GI' }, { value: 'neuro', label: 'Neuro' },
+        { value: 'dehydration', label: 'Dehydration' }, { value: 'medication', label: 'Medication' },
+        { value: 'wound', label: 'Wound' }, { value: 'behavioral', label: 'Behavioral' },
+        { value: 'other', label: 'Other' },
+      ]},
     ],
     optionalInputs: [
-      { name: 'daysSinceAdmission', label: 'Days Since Admission', type: 'text', placeholder: '' },
-      { name: 'conditionChangeDocumented', label: 'Change in Condition Documented?', type: 'text', placeholder: 'yes or no' },
-      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: '' },
+      { name: 'daysSinceAdmission', label: 'Days Since Admission', type: 'text', placeholder: 'e.g. 5' },
+      { name: 'conditionChangeDocumented', label: 'Change in Condition Documented?', type: 'select', placeholder: 'Select...', options: [
+        { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' },
+      ]},
+      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: 'Do not include patient names or identifiers' },
     ],
     missingInfoQuestions: [],
     outputSections: ['Classification', 'Reasoning', 'Root Causes', 'Prevention', 'QI Actions'],
@@ -1069,13 +1129,28 @@ export const WORKFLOWS = {
     requiredInputs: [
       { name: 'transferDate', label: 'Transfer Date', type: 'date', placeholder: '' },
       { name: 'primaryDiagnosis', label: 'Primary Diagnosis / Reason', type: 'text', placeholder: '' },
-      { name: 'diagnosisCategory', label: 'Category', type: 'text', placeholder: 'cardiac, respiratory, infection, fall, gi, neuro, dehydration, medication, wound, behavioral, other' },
+      { name: 'diagnosisCategory', label: 'Category', type: 'select', placeholder: 'Select...', options: [
+        { value: 'cardiac', label: 'Cardiac' }, { value: 'respiratory', label: 'Respiratory' },
+        { value: 'infection', label: 'Infection' }, { value: 'fall', label: 'Fall' },
+        { value: 'gi', label: 'GI' }, { value: 'neuro', label: 'Neuro' },
+        { value: 'dehydration', label: 'Dehydration' }, { value: 'medication', label: 'Medication' },
+        { value: 'wound', label: 'Wound' }, { value: 'behavioral', label: 'Behavioral' },
+        { value: 'other', label: 'Other' },
+      ]},
     ],
     optionalInputs: [
-      { name: 'transferTimeCategory', label: 'Time of Transfer', type: 'text', placeholder: 'business_hours, evening, night, weekend' },
-      { name: 'payerType', label: 'Payer', type: 'text', placeholder: 'medicare, managed_care, medicaid, private' },
-      { name: 'readmissionFlag', label: '30-Day Readmission?', type: 'text', placeholder: 'yes or no' },
-      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: '' },
+      { name: 'transferTimeCategory', label: 'Time of Transfer', type: 'select', placeholder: 'Select...', options: [
+        { value: 'business_hours', label: 'Business Hours' }, { value: 'evening', label: 'Evening' },
+        { value: 'night', label: 'Night' }, { value: 'weekend', label: 'Weekend' },
+      ]},
+      { name: 'payerType', label: 'Payer', type: 'select', placeholder: 'Select...', options: [
+        { value: 'medicare', label: 'Medicare' }, { value: 'managed_care', label: 'Managed Care' },
+        { value: 'medicaid', label: 'Medicaid' }, { value: 'private', label: 'Private' },
+      ]},
+      { name: 'readmissionFlag', label: '30-Day Readmission?', type: 'select', placeholder: 'Select...', options: [
+        { value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' },
+      ]},
+      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: 'Do not include patient names or identifiers' },
     ],
     missingInfoQuestions: [],
     outputSections: ['Classification', 'Reasoning', 'Root Causes', 'Portfolio Pattern', 'QI Actions'],

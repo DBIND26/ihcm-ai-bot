@@ -61,6 +61,21 @@ export default function WorkflowPanel({
                         resize: 'vertical', minHeight: '80px'
                       }}
                     />
+                  ) : input.type === 'select' && input.options ? (
+                    <select
+                      value={workflowInputs[input.name] || ''}
+                      onChange={e => onWorkflowInputChange(input.name, e.target.value)}
+                      style={{
+                        width: '100%', padding: '8px 12px', borderRadius: '6px',
+                        border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit',
+                        boxSizing: 'border-box', backgroundColor: 'white',
+                      }}
+                    >
+                      <option value="">{input.placeholder || 'Select...'}</option>
+                      {input.options.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
                   ) : (
                     <input
                       type={input.type || 'text'}

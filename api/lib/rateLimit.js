@@ -48,6 +48,22 @@ export function getFeedbackLimiter() {
 }
 
 /**
+ * Rate limiter for hospitalization reviews: 5 per minute per user
+ */
+let hospLimiter = null;
+export function getHospLimiter() {
+  if (hospLimiter) return hospLimiter;
+  const redis = getRedis();
+  if (!redis) return null;
+  hospLimiter = new Ratelimit({
+    redis,
+    limiter: Ratelimit.slidingWindow(5, '60 s'),
+    prefix: 'ihcm:hosp',
+  });
+  return hospLimiter;
+}
+
+/**
  * Check rate limit. Returns { success, limit, remaining, reset } or null if not configured.
  * @param {Ratelimit} limiter
  * @param {string} identifier - user ID or IP

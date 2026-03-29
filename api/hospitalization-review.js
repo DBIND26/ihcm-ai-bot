@@ -16,6 +16,7 @@
 // 4. Set hidden: false on hospitalization_review_* workflows in workflows.js
 
 import { requireAuth } from './lib/requireAuth.js';
+import { getHospLimiter, checkRateLimit } from './lib/rateLimit.js';
 
 const DIAGNOSIS_CATEGORIES = [
   'cardiac', 'respiratory', 'infection', 'fall',
@@ -179,8 +180,16 @@ export default async function handler(req, res) {
       return res.status(200).json({ reviews: reviews || [] });
     }
 
-    // ── POST: submit new review ──
+    // ── POST: submit new review (rate-limited) ──
     if (req.method === 'POST') {
+      // Rate limit: 5 submissions per minute per user
+      const limiter = getHospLimiter();
+      const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 'unknown';
+      const rl = await checkRateLimit(limiter, `hosp:${user.id || ip}`);
+      if (!rl.success) {
+        return res.status(429).json({ error: 'Too many submissions — please wait a moment.' });
+      }
+
       const body = req.body || {};
       const {
         buildingId, transferDate, transferTimeCategory,
@@ -353,6 +362,17 @@ Only include root_causes that genuinely apply — do not pad the list.`,
       // PHI check on override reason
       if (overrideReason && containsPHI(overrideReason)) {
         return res.status(422).json({ error: 'Override reason appears to contain PHI. Please remove identifiers.' });
+      }
+
+      // Check if this is an override (different from AI classification) — require reason
+      const { data: existing } = await supabaseUser
+        .from('hospitalization_reviews')
+        .select('ai_avoidability')
+        .eq('review_id', reviewId)
+        .single();
+
+      if (existing && existing.ai_avoidability && existing.ai_avoidability !== finalAvoidability && !overrideReason?.trim()) {
+        return res.status(400).json({ error: 'Override reason is required when changing the AI classification' });
       }
 
       const { error } = await supabase

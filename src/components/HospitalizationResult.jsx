@@ -125,25 +125,32 @@ export default function HospitalizationResult({ result, onConfirm, authHeaders }
             ))}
           </div>
           {isOverride && (
-            <input
-              type="text"
-              value={overrideReason}
-              onChange={e => setOverrideReason(e.target.value)}
-              placeholder="Reason for override (no PHI)..."
-              style={{
-                width: '100%', padding: '6px 10px', borderRadius: '6px',
-                border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit',
-                marginBottom: '8px', boxSizing: 'border-box',
-              }}
-            />
+            <div style={{ marginBottom: '8px' }}>
+              <input
+                type="text"
+                value={overrideReason}
+                onChange={e => setOverrideReason(e.target.value)}
+                placeholder="Reason for override (required, no PHI)..."
+                style={{
+                  width: '100%', padding: '6px 10px', borderRadius: '6px',
+                  border: `1px solid ${!overrideReason.trim() ? '#fca5a5' : '#d1d5db'}`,
+                  fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box',
+                }}
+              />
+              {!overrideReason.trim() && (
+                <div style={{ fontSize: '11px', color: '#dc2626', marginTop: '3px' }}>
+                  Override reason is required when changing the AI classification
+                </div>
+              )}
+            </div>
           )}
           <button
             onClick={handleConfirm}
-            disabled={!finalChoice || submitting}
+            disabled={!finalChoice || submitting || (isOverride && !overrideReason.trim())}
             style={{
               padding: '6px 16px', borderRadius: '6px', border: 'none',
-              backgroundColor: finalChoice ? '#2563eb' : '#d1d5db',
-              color: 'white', cursor: finalChoice ? 'pointer' : 'not-allowed',
+              backgroundColor: (finalChoice && (!isOverride || overrideReason.trim())) ? '#2563eb' : '#d1d5db',
+              color: 'white', cursor: (finalChoice && (!isOverride || overrideReason.trim())) ? 'pointer' : 'not-allowed',
               fontSize: '13px', fontWeight: '600',
             }}
           >
