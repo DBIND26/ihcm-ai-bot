@@ -382,19 +382,37 @@ function sanitizeMessages(messages) {
       content: m.content.slice(0, MAX_MESSAGE_LENGTH),
     }));
 
-  // If conversation exceeds window, prepend a summary of older messages
+  // If conversation exceeds window, prepend a summary of older exchanges
   if (filtered.length > MAX_MESSAGES) {
     const older = filtered.slice(0, filtered.length - MAX_MESSAGES);
-    const summary = older
+
+    // Summarize both user asks AND assistant commitments
+    const userSummary = older
       .filter(m => m.role === 'user')
       .map(m => m.content.slice(0, 100))
       .join('; ');
+    const assistantSummary = older
+      .filter(m => m.role === 'assistant')
+      .map(m => {
+        // Extract key commitments: section headers, action items, caveats
+        const lines = m.content.split('\n');
+        const keyLines = lines
+          .filter(l => l.startsWith('##') || l.startsWith('- ') || l.includes('ASSUMED') || l.includes('verify'))
+          .slice(0, 3)
+          .map(l => l.replace(/^##\s*/, '').replace(/^-\s*/, '').trim());
+        return keyLines.length > 0 ? keyLines.join('; ') : m.content.slice(0, 80);
+      })
+      .join('; ');
+
     const window = filtered.slice(-MAX_MESSAGES);
-    // Inject summary as a system-style context hint in the first user message
-    if (summary && window.length > 0) {
+    const summaryParts = [];
+    if (userSummary) summaryParts.push(`User asked about: ${userSummary.slice(0, 400)}`);
+    if (assistantSummary) summaryParts.push(`Assistant covered: ${assistantSummary.slice(0, 400)}`);
+
+    if (summaryParts.length > 0 && window.length > 0) {
       window.unshift({
         role: 'user',
-        content: `[Earlier in this conversation, I asked about: ${summary.slice(0, 500)}]`,
+        content: `[Earlier in this conversation — ${summaryParts.join('. ')}]`,
       });
     }
     return window;
@@ -581,6 +599,7 @@ export default async function handler(req, res) {
               .insert({
                 user_id: betaUserId,
                 facility_id: facilityId,
+                bot_id: botId || null,
                 workflow_type: workflowId || null,
                 title: sanitized[0]?.content?.slice(0, 100) || 'New conversation',
                 status: 'active',

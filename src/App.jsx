@@ -72,7 +72,7 @@ export default function App() {
     const loadFromServer = async () => {
       if (!userSession?.userName) return false;
       try {
-        const params = new URLSearchParams({ user: userSession.userName });
+        const params = new URLSearchParams({ user: userSession.userName, role: activeRoleId });
         if (activeBuildingId && activeBuildingId !== 'none') {
           params.set('building', activeBuildingId);
         }
@@ -84,7 +84,7 @@ export default function App() {
         // Auto-load the most recent conversation
         if (data.conversations?.length > 0) {
           const latest = data.conversations[0];
-          const msgRes = await fetch(`/api/conversations?id=${latest.conversation_id}`);
+          const msgRes = await fetch(`/api/conversations?id=${latest.conversation_id}&user=${encodeURIComponent(userSession.userName)}`);
           if (msgRes.ok) {
             const msgData = await msgRes.json();
             if (msgData.messages?.length > 0) {
@@ -422,7 +422,7 @@ export default function App() {
   // Load a specific conversation from server
   const handleLoadConversation = async (conv) => {
     try {
-      const res = await fetch(`/api/conversations?id=${conv.conversation_id}`);
+      const res = await fetch(`/api/conversations?id=${conv.conversation_id}&user=${encodeURIComponent(userSession?.userName)}`);
       if (!res.ok) throw new Error('Failed to load');
       const data = await res.json();
       setMessages(data.messages || []);
@@ -440,7 +440,7 @@ export default function App() {
     if (!userSession?.userName) return;
     setLoadingConversations(true);
     try {
-      const params = new URLSearchParams({ user: userSession.userName });
+      const params = new URLSearchParams({ user: userSession.userName, role: activeRoleId });
       if (activeBuildingId && activeBuildingId !== 'none') {
         params.set('building', activeBuildingId);
       }

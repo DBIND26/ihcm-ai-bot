@@ -41,10 +41,32 @@ export default async function handler(req, res) {
   const conversationId = url.searchParams.get('id');
   const userName = url.searchParams.get('user');
   const buildingId = url.searchParams.get('building');
+  const roleId = url.searchParams.get('role');
 
   try {
     // ── Detail mode: load a specific conversation's messages ──
     if (conversationId) {
+      // Ownership check: require user param and verify the conversation belongs to them
+      if (!userName) {
+        return res.status(400).json({ error: 'Missing user parameter for ownership verification' });
+      }
+      const betaUserId = await getOrCreateBetaUser(supabase, userName);
+      if (!betaUserId) {
+        return res.status(403).json({ error: 'Unknown user' });
+      }
+
+      // Verify conversation ownership before loading messages
+      const { data: conv, error: convError } = await supabase
+        .from('conversations')
+        .select('conversation_id')
+        .eq('conversation_id', conversationId)
+        .eq('user_id', betaUserId)
+        .single();
+
+      if (convError || !conv) {
+        return res.status(403).json({ error: 'Conversation not found or access denied' });
+      }
+
       const { data: messages, error } = await supabase
         .from('conversation_messages')
         .select('role, content, created_at')
@@ -101,6 +123,9 @@ export default async function handler(req, res) {
 
     if (facilityId) {
       query = query.eq('facility_id', facilityId);
+    }
+    if (roleId) {
+      query = query.eq('bot_id', roleId);
     }
 
     const { data: conversations, error } = await query;
