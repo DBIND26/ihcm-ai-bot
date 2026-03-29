@@ -1,7 +1,8 @@
 -- ============================================================================
 -- Hospitalization Review Tool — anonymized case tracking
 -- ============================================================================
--- No PHI stored. Tracks de-identified hospitalization cases with
+-- PHI prohibited; server-side guardrails reject obvious identifiers.
+-- Tracks de-identified hospitalization cases with
 -- AI-assisted avoidability analysis and aggregate trends.
 
 CREATE TABLE IF NOT EXISTS public.hospitalization_reviews (

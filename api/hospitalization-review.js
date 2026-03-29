@@ -5,8 +5,15 @@
 // list reviews by building, get aggregate stats, and confirm/override AI.
 //
 // Role-restricted: DON, Admin, MDS, Regional (+ super_admin, corporate_admin)
-// PHI guardrails: server-side pattern rejection on free-text fields
-// AI output: structured JSON parsing (not regex on plain text)
+// PHI guardrails: server-side pattern rejection on free-text fields (heuristic, not guaranteed)
+// AI output: structured JSON parsing with fallback logging
+// RLS: table policies are currently open (USING true) — access enforced at API layer
+//
+// ACTIVATION CHECKLIST:
+// 1. Run migration 202603290010_hospitalization_reviews.sql in Supabase SQL Editor
+// 2. Run migration 202603290011_hosp_review_audit_fix.sql in Supabase SQL Editor
+// 3. Set SHOW_HOSPITALIZATIONS = true in src/components/Dashboard.jsx
+// 4. Set hidden: false on hospitalization_review_* workflows in workflows.js
 
 import { requireAuth } from './lib/requireAuth.js';
 
@@ -265,6 +272,10 @@ Only include root_causes that genuinely apply — do not pad the list.`,
         };
       } catch (err) {
         console.warn('[hosp-review] AI analysis failed:', err.message);
+        // Log raw response for debugging (never shown to user)
+        if (aiAnalysisText) {
+          console.warn('[hosp-review] Raw AI response (parse failed):', aiAnalysisText.slice(0, 500));
+        }
         aiAnalysisText = 'AI analysis unavailable — please classify manually.';
       }
 
