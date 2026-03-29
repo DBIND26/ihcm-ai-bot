@@ -22,7 +22,6 @@ import { createClient } from '@supabase/supabase-js';
 import { getRoleById } from '../src/bots.js';
 import { getBuildingById, getBuildingProfile } from '../src/buildings.js';
 import { getWorkflowById } from '../src/workflows.js';
-// betaUser import removed — using auth.uid() from requireAuth
 
 // ── Configuration ──
 
@@ -313,26 +312,6 @@ async function fetchBuildingContext(buildingSlug) {
   }
 }
 
-/**
- * Fetch global core fragments from Supabase.
- * Falls back to the static GLOBAL_CORE constant.
- */
-async function fetchGlobalCore() {
-  if (!supabase) return null;
-
-  try {
-    const { data, error } = await supabase
-      .from('global_core')
-      .select('content')
-      .eq('is_active', true)
-      .order('sort_order', { ascending: true });
-
-    if (error || !data?.length) return null;
-    return data.map(row => row.content).join('\n\n');
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Fetch relevant knowledge sources for the current role and building.

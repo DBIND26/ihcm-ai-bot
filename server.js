@@ -30,7 +30,6 @@ try {
 // Dynamic imports so env vars are available when modules initialize
 const { default: chatHandler } = await import('./v2_definitive/api/chat.js');
 const { default: parseHandler } = await import('./api/parse-2567.js');
-const { default: verifyHandler } = await import('./api/verify-access.js');
 const { default: feedbackHandler } = await import('./api/feedback.js');
 const { default: conversationsHandler } = await import('./api/conversations.js');
 const { default: ingestCensusHandler } = await import('./api/ingest-census.js');
@@ -65,14 +64,6 @@ const server = http.createServer(async (req, res) => {
   };
 
   try {
-    // Route: /api/verify-access — password gate
-    if (url.pathname === '/api/verify-access' && req.method === 'POST') {
-      let body = '';
-      for await (const chunk of req) { body += chunk; }
-      try { req.body = JSON.parse(body); } catch { req.body = {}; }
-      await verifyHandler(req, resAdapter);
-      return;
-    }
 
     // Route: /api/feedback — feedback collection
     if (url.pathname === '/api/feedback' && req.method === 'POST') {

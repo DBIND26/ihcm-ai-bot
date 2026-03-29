@@ -7,6 +7,7 @@ export default function AccessGate({ onAuthenticated }) {
   const [error, setError] = useState(null);
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
 
   // Check for existing session on mount
   useEffect(() => {
@@ -99,6 +100,24 @@ export default function AccessGate({ onAuthenticated }) {
     }
   };
 
+  const handleResetPassword = async () => {
+    if (!email.trim()) return;
+    setError(null);
+    setResetSent(false);
+    try {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: window.location.origin,
+      });
+      if (resetError) {
+        setError(resetError.message);
+      } else {
+        setResetSent(true);
+      }
+    } catch {
+      setError('Failed to send reset email');
+    }
+  };
+
   if (checking) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Inter, system-ui, sans-serif' }}>
@@ -135,12 +154,21 @@ export default function AccessGate({ onAuthenticated }) {
           placeholder="Password" autoComplete="current-password" style={inputStyle} />
 
         {error && <p style={{ color: '#dc2626', fontSize: '13px', margin: '0 0 12px 0' }}>{error}</p>}
+        {resetSent && <p style={{ color: '#166534', fontSize: '13px', margin: '0 0 12px 0' }}>Password reset email sent. Check your inbox.</p>}
         <button type="submit" disabled={loading} style={{
           width: '100%', padding: '12px', borderRadius: '8px', border: 'none',
           backgroundColor: loading ? '#93c5fd' : '#2563eb', color: 'white', fontSize: '15px',
           fontWeight: '600', cursor: loading ? 'not-allowed' : 'pointer'
         }}>
           {loading ? 'Signing in...' : 'Sign In'}
+        </button>
+        <button type="button" onClick={handleResetPassword} disabled={!email.trim() || loading}
+          style={{
+            marginTop: '12px', background: 'none', border: 'none', color: '#6b7280',
+            fontSize: '13px', cursor: email.trim() ? 'pointer' : 'default',
+            textDecoration: 'underline', width: '100%',
+          }}>
+          Forgot password?
         </button>
       </form>
     </div>

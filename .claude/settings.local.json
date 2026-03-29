@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm api/lib/betaUser.js)",
+      "Bash(rm api/verify-access.js)",
+      "Bash(node -e \":*)"
+    ]
+  }
+}

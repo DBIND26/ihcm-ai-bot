@@ -1567,6 +1567,29 @@ export default function App() {
               Clear 2567 context
             </button>
           )}
+          {messages.length > 0 && (
+            <button
+              onClick={() => {
+                const text = messages.map(m =>
+                  `${m.role === 'user' ? 'You' : 'IHCM Bot'}:\n${m.content}`
+                ).join('\n\n---\n\n');
+                const header = `IHCM AI Bot — ${activeRole?.name || 'Chat'}\n${activeBuildingId !== 'none' ? activeBuildings.find(b => b.id === activeBuildingId)?.label || '' : 'All Buildings'}\nExported: ${new Date().toLocaleString()}\n\n${'='.repeat(60)}\n\n`;
+                const blob = new Blob([header + text], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `ihcm-${activeRoleId}-${activeBuildingId}-${new Date().toISOString().split('T')[0]}.txt`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              style={{
+                background: 'none', border: 'none', color: '#9ca3af',
+                cursor: 'pointer', fontSize: '12px', textDecoration: 'underline'
+              }}
+            >
+              Export conversation
+            </button>
+          )}
           <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#d97706' }}>
             Do not enter patient names, DOBs, SSNs, or other PHI
           </span>
