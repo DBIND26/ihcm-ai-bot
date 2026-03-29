@@ -39,6 +39,7 @@ const { default: ingestSwotHandler } = await import('./api/ingest-swot.js');
 const { default: adminHandler } = await import('./api/admin.js');
 const { default: buildingHistoryHandler } = await import('./api/building-history.js');
 const { default: ingestKnowledgeHandler } = await import('./api/ingest-knowledge.js');
+const { default: hospReviewHandler } = await import('./api/hospitalization-review.js');
 
 const PORT = 3001;
 
@@ -139,6 +140,22 @@ const server = http.createServer(async (req, res) => {
         for await (const chunk of req) { body += chunk; }
         try { req.body = JSON.parse(body); } catch { req.body = {}; }
         await ingestKnowledgeHandler(req, resAdapter);
+        return;
+      }
+    }
+
+    // Route: /api/hospitalization-review — hospitalization avoidability tool
+    if (url.pathname === '/api/hospitalization-review') {
+      if (req.method === 'GET') {
+        req.url = url.pathname + url.search;
+        await hospReviewHandler(req, resAdapter);
+        return;
+      }
+      if (req.method === 'POST' || req.method === 'PATCH') {
+        let body = '';
+        for await (const chunk of req) { body += chunk; }
+        try { req.body = JSON.parse(body); } catch { req.body = {}; }
+        await hospReviewHandler(req, resAdapter);
         return;
       }
     }

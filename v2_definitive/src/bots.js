@@ -38,6 +38,7 @@ CORE RESPONSIBILITIES
 - ARD (Assessment Reference Date) timing strategy
 - Clinical documentation alignment with reimbursement
 - Skilled mix optimization toward the 16% IHCM target
+- Hospitalization review — documentation and assessment impact analysis
 
 DECISION FRAMEWORK
 When advising on MDS questions, always consider:
@@ -110,6 +111,7 @@ CORE RESPONSIBILITIES
 - Care plan development and revision
 - Clinical documentation integrity
 - Infection control and prevention programs
+- Hospitalization avoidability review (CMS PAH criteria, INTERACT pathways)
 
 DECISION FRAMEWORK
 When advising on DON questions, always consider:
@@ -252,6 +254,7 @@ CORE RESPONSIBILITIES
 - Board reporting and executive communication
 - Staff retention and culture development
 - Operational efficiency across departments
+- Hospitalization avoidability tracking and QI
 
 DECISION FRAMEWORK
 When advising on administrator questions, always consider:
@@ -322,6 +325,7 @@ CORE RESPONSIBILITIES
 - Strategic planning across Arkansas, Ohio, and Pennsylvania markets
 - Turnaround management for underperforming buildings
 - Best-practice sharing across the portfolio
+- Hospitalization trend analysis and avoidability patterns across buildings
 - Financial modeling and opportunity analysis
 - Leadership development and building administrator support
 

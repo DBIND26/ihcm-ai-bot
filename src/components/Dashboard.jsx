@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import BuildingDetail from './BuildingDetail';
 
+// Feature flag — set to true to show hospitalization data on dashboard
+const SHOW_HOSPITALIZATIONS = false;
+
 export const RISK_COLORS = {
   critical: { bg: '#fef2f2', border: '#fca5a5', text: '#991b1b', label: 'CRITICAL' },
   high_risk: { bg: '#fff7ed', border: '#fdba74', text: '#9a3412', label: 'HIGH RISK' },
@@ -13,6 +16,7 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedSlug, setSelectedSlug] = useState(null);
+  const [hospStats, setHospStats] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -21,6 +25,14 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
         if (!res.ok) throw new Error('Failed to load dashboard');
         const json = await res.json();
         setData(json);
+
+        // Load hospitalization stats if feature enabled
+        if (SHOW_HOSPITALIZATIONS) {
+          try {
+            const hospRes = await fetch('/api/hospitalization-review?mode=stats', { headers: authHeaders() });
+            if (hospRes.ok) setHospStats(await hospRes.json());
+          } catch { /* non-blocking */ }
+        }
       } catch (err) {
         setError(err.message);
       } finally {
@@ -63,6 +75,14 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
         })()}
         <SummaryCard label="Buildings" value={buildings.length} sub={`${totals.buildings_at_risk} at risk`} color={totals.buildings_at_risk > 0 ? '#dc2626' : '#166534'} />
         <SummaryCard label="Open Alerts" value={totals.total_alerts} sub={`${totals.buildings_watch} on watch`} color={totals.total_alerts > 3 ? '#dc2626' : '#6b7280'} />
+        {SHOW_HOSPITALIZATIONS && hospStats && (
+          <SummaryCard
+            label="Hospitalizations"
+            value={hospStats.total}
+            sub={hospStats.avoidable_pct != null ? `${hospStats.avoidable_pct}% avoidable` : `${hospStats.pending} pending`}
+            color={hospStats.avoidable_pct > 30 ? '#dc2626' : hospStats.avoidable_pct > 15 ? '#d97706' : '#166534'}
+          />
+        )}
       </div>
 
       {/* Building Cards */}

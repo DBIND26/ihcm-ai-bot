@@ -917,6 +917,185 @@ export const WORKFLOWS = {
       ].filter(Boolean).join('\n');
     },
   },
+  // ── Hospitalization Review (shared across DON, Admin, MDS, Regional) ──
+  // HIDDEN — set hidden: false to enable in UI
+
+  hospitalization_review_don: {
+    id: 'hospitalization_review_don',
+    roleId: 'don',
+    hidden: true,
+    label: 'Hospitalization Review',
+    description: 'Analyze a hospitalization transfer for avoidability using CMS PAH criteria and INTERACT pathways. No PHI — use de-identified case details only.',
+    requiredInputs: [
+      { name: 'transferDate', label: 'Transfer Date', type: 'date', placeholder: '' },
+      { name: 'primaryDiagnosis', label: 'Primary Diagnosis / Reason for Transfer', type: 'text', placeholder: 'e.g. CHF exacerbation, fall with hip fracture, sepsis' },
+      { name: 'diagnosisCategory', label: 'Diagnosis Category', type: 'text', placeholder: 'cardiac, respiratory, infection, fall, gi, neuro, dehydration, medication, wound, behavioral, other' },
+    ],
+    optionalInputs: [
+      { name: 'transferTimeCategory', label: 'Time of Transfer', type: 'text', placeholder: 'business_hours, evening, night, weekend' },
+      { name: 'daysSinceAdmission', label: 'Days Since SNF Admission', type: 'text', placeholder: 'e.g. 5' },
+      { name: 'payerType', label: 'Payer Type', type: 'text', placeholder: 'medicare, managed_care, medicaid, private' },
+      { name: 'presentOnAdmission', label: 'Condition Present on Admission?', type: 'text', placeholder: 'yes or no' },
+      { name: 'physicianNotified', label: 'Physician Notified Before Transfer?', type: 'text', placeholder: 'yes or no' },
+      { name: 'conditionChangeDocumented', label: 'Change in Condition Documented?', type: 'text', placeholder: 'yes or no' },
+      { name: 'interactToolUsed', label: 'INTERACT Tool Used?', type: 'text', placeholder: 'yes or no' },
+      { name: 'readmissionFlag', label: '30-Day Readmission?', type: 'text', placeholder: 'yes or no' },
+      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: 'Any relevant clinical or operational context' },
+    ],
+    missingInfoQuestions: [
+      'What was the date of the hospital transfer?',
+      'What was the primary diagnosis or reason for transfer?',
+      'What category does this fall under? (cardiac, respiratory, infection, fall, etc.)',
+    ],
+    outputSections: [
+      'Classification (Avoidable / Possibly Avoidable / Unavoidable)',
+      'Reasoning',
+      'Root Causes',
+      'INTERACT Pathway',
+      'Prevention Measures',
+      'QI Action Items',
+    ],
+    reviewChecklist: [
+      'No patient names, DOBs, or PHI in the submission',
+      'Diagnosis category is accurate',
+      'Clinical indicators (physician notified, documentation, INTERACT) are factual',
+      'AI classification reviewed — confirm or override',
+      'QI actions are assigned to responsible parties',
+    ],
+    draftModeRequired: false,
+    promptTemplate(inputs) {
+      return [
+        `Analyze this hospitalization transfer for avoidability.`,
+        ``,
+        `Transfer Date: ${inputs.transferDate}`,
+        `Primary Diagnosis: ${inputs.primaryDiagnosis}`,
+        `Category: ${inputs.diagnosisCategory}`,
+        inputs.transferTimeCategory ? `Time: ${inputs.transferTimeCategory}` : '',
+        inputs.daysSinceAdmission ? `Days Since Admission: ${inputs.daysSinceAdmission}` : '',
+        inputs.payerType ? `Payer: ${inputs.payerType}` : '',
+        inputs.presentOnAdmission ? `Present on Admission: ${inputs.presentOnAdmission}` : '',
+        inputs.physicianNotified ? `Physician Notified: ${inputs.physicianNotified}` : '',
+        inputs.conditionChangeDocumented ? `Condition Change Documented: ${inputs.conditionChangeDocumented}` : '',
+        inputs.interactToolUsed ? `INTERACT Tool Used: ${inputs.interactToolUsed}` : '',
+        inputs.readmissionFlag ? `30-Day Readmission: ${inputs.readmissionFlag}` : '',
+        inputs.additionalContext ? `\nAdditional Context: ${inputs.additionalContext}` : '',
+        ``,
+        `Provide classification (avoidable/possibly_avoidable/unavoidable), reasoning, root causes, applicable INTERACT pathway, prevention measures, and QI action items.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
+
+  hospitalization_review_admin: {
+    id: 'hospitalization_review_admin',
+    roleId: 'admin',
+    hidden: true,
+    label: 'Hospitalization Review',
+    description: 'Review a hospitalization transfer for avoidability — operational and financial impact analysis.',
+    requiredInputs: [
+      { name: 'transferDate', label: 'Transfer Date', type: 'date', placeholder: '' },
+      { name: 'primaryDiagnosis', label: 'Primary Diagnosis / Reason for Transfer', type: 'text', placeholder: 'e.g. CHF exacerbation, fall with hip fracture' },
+      { name: 'diagnosisCategory', label: 'Diagnosis Category', type: 'text', placeholder: 'cardiac, respiratory, infection, fall, gi, neuro, dehydration, medication, wound, behavioral, other' },
+    ],
+    optionalInputs: [
+      { name: 'transferTimeCategory', label: 'Time of Transfer', type: 'text', placeholder: 'business_hours, evening, night, weekend' },
+      { name: 'daysSinceAdmission', label: 'Days Since SNF Admission', type: 'text', placeholder: 'e.g. 5' },
+      { name: 'payerType', label: 'Payer Type', type: 'text', placeholder: 'medicare, managed_care, medicaid, private' },
+      { name: 'physicianNotified', label: 'Physician Notified?', type: 'text', placeholder: 'yes or no' },
+      { name: 'interactToolUsed', label: 'INTERACT Tool Used?', type: 'text', placeholder: 'yes or no' },
+      { name: 'readmissionFlag', label: '30-Day Readmission?', type: 'text', placeholder: 'yes or no' },
+      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: '' },
+    ],
+    missingInfoQuestions: [],
+    outputSections: ['Classification', 'Reasoning', 'Root Causes', 'Prevention', 'QI Actions'],
+    reviewChecklist: ['No PHI in submission', 'AI classification reviewed', 'QI actions assigned'],
+    draftModeRequired: false,
+    promptTemplate(inputs) {
+      return [
+        `Analyze this hospitalization for avoidability from an operational perspective.`,
+        `Transfer Date: ${inputs.transferDate}`,
+        `Diagnosis: ${inputs.primaryDiagnosis} (${inputs.diagnosisCategory})`,
+        inputs.payerType ? `Payer: ${inputs.payerType}` : '',
+        inputs.transferTimeCategory ? `Time: ${inputs.transferTimeCategory}` : '',
+        inputs.physicianNotified ? `Physician Notified: ${inputs.physicianNotified}` : '',
+        inputs.interactToolUsed ? `INTERACT Used: ${inputs.interactToolUsed}` : '',
+        inputs.readmissionFlag ? `30-Day Readmission: ${inputs.readmissionFlag}` : '',
+        inputs.additionalContext ? `Context: ${inputs.additionalContext}` : '',
+        ``,
+        `Provide classification, reasoning, root causes, prevention measures, and QI actions.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
+
+  hospitalization_review_mds: {
+    id: 'hospitalization_review_mds',
+    roleId: 'mds',
+    hidden: true,
+    label: 'Hospitalization Review',
+    description: 'Analyze a hospitalization transfer — focus on documentation and assessment impact.',
+    requiredInputs: [
+      { name: 'transferDate', label: 'Transfer Date', type: 'date', placeholder: '' },
+      { name: 'primaryDiagnosis', label: 'Primary Diagnosis / Reason', type: 'text', placeholder: '' },
+      { name: 'diagnosisCategory', label: 'Category', type: 'text', placeholder: 'cardiac, respiratory, infection, fall, gi, neuro, dehydration, medication, wound, behavioral, other' },
+    ],
+    optionalInputs: [
+      { name: 'daysSinceAdmission', label: 'Days Since Admission', type: 'text', placeholder: '' },
+      { name: 'conditionChangeDocumented', label: 'Change in Condition Documented?', type: 'text', placeholder: 'yes or no' },
+      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: '' },
+    ],
+    missingInfoQuestions: [],
+    outputSections: ['Classification', 'Reasoning', 'Root Causes', 'Prevention', 'QI Actions'],
+    reviewChecklist: ['No PHI', 'Classification reviewed'],
+    draftModeRequired: false,
+    promptTemplate(inputs) {
+      return [
+        `Analyze this hospitalization for avoidability — focus on documentation and MDS implications.`,
+        `Transfer Date: ${inputs.transferDate}`,
+        `Diagnosis: ${inputs.primaryDiagnosis} (${inputs.diagnosisCategory})`,
+        inputs.daysSinceAdmission ? `Days Since Admission: ${inputs.daysSinceAdmission}` : '',
+        inputs.conditionChangeDocumented ? `Condition Change Documented: ${inputs.conditionChangeDocumented}` : '',
+        inputs.additionalContext ? `Context: ${inputs.additionalContext}` : '',
+        ``,
+        `Provide classification, reasoning, root causes, prevention, and QI actions.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
+
+  hospitalization_review_regional: {
+    id: 'hospitalization_review_regional',
+    roleId: 'regional',
+    hidden: true,
+    label: 'Hospitalization Review',
+    description: 'Portfolio-level hospitalization analysis — identify patterns and focus areas across buildings.',
+    requiredInputs: [
+      { name: 'transferDate', label: 'Transfer Date', type: 'date', placeholder: '' },
+      { name: 'primaryDiagnosis', label: 'Primary Diagnosis / Reason', type: 'text', placeholder: '' },
+      { name: 'diagnosisCategory', label: 'Category', type: 'text', placeholder: 'cardiac, respiratory, infection, fall, gi, neuro, dehydration, medication, wound, behavioral, other' },
+    ],
+    optionalInputs: [
+      { name: 'transferTimeCategory', label: 'Time of Transfer', type: 'text', placeholder: 'business_hours, evening, night, weekend' },
+      { name: 'payerType', label: 'Payer', type: 'text', placeholder: 'medicare, managed_care, medicaid, private' },
+      { name: 'readmissionFlag', label: '30-Day Readmission?', type: 'text', placeholder: 'yes or no' },
+      { name: 'additionalContext', label: 'Additional Context (no PHI)', type: 'textarea', placeholder: '' },
+    ],
+    missingInfoQuestions: [],
+    outputSections: ['Classification', 'Reasoning', 'Root Causes', 'Portfolio Pattern', 'QI Actions'],
+    reviewChecklist: ['No PHI', 'Pattern analysis reviewed'],
+    draftModeRequired: false,
+    promptTemplate(inputs) {
+      return [
+        `Analyze this hospitalization from a regional/portfolio perspective.`,
+        `Transfer Date: ${inputs.transferDate}`,
+        `Diagnosis: ${inputs.primaryDiagnosis} (${inputs.diagnosisCategory})`,
+        inputs.transferTimeCategory ? `Time: ${inputs.transferTimeCategory}` : '',
+        inputs.payerType ? `Payer: ${inputs.payerType}` : '',
+        inputs.readmissionFlag ? `30-Day Readmission: ${inputs.readmissionFlag}` : '',
+        inputs.additionalContext ? `Context: ${inputs.additionalContext}` : '',
+        ``,
+        `Provide classification, reasoning, root causes, portfolio-level pattern analysis, and QI actions.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
+
 };
 
 // ── Helpers ──
@@ -926,5 +1105,5 @@ export function getWorkflowById(id) {
 }
 
 export function getWorkflowsForRole(roleId) {
-  return Object.values(WORKFLOWS).filter(w => w.roleId === roleId);
+  return Object.values(WORKFLOWS).filter(w => w.roleId === roleId && !w.hidden);
 }
