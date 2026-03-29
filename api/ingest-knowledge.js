@@ -38,7 +38,7 @@ export default async function handler(req, res) {
 
     let query = supabase
       .from('knowledge_sources')
-      .select('source_id, title, source_type, state_code, facility_id, tags, status, effective_date, updated_at, citation_text')
+      .select('source_id, title, source_type, state_code, facility_id, tags, status, effective_date, updated_at, citation_text, current_version, approver_user_id')
       .order('updated_at', { ascending: false })
       .limit(50);
 

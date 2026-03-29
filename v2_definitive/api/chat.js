@@ -259,7 +259,11 @@ function formatWorkflowContract(workflow) {
     'REVIEW CHECKLIST (include at the end of the document):',
     ...workflow.reviewChecklist.map(c => `- ${c}`),
     '',
-    'OUTPUT FORMAT — DRAFT MODE ACTIVE: respond as a structured, professional document with section headings, numbered steps where appropriate, and formal language.',
+    'OUTPUT FORMAT — DRAFT MODE ACTIVE:',
+    '- Respond as a structured, professional document with section headings and numbered steps.',
+    '- Use the actual building name, CMS ID, and building data from your context — do NOT use generic placeholders.',
+    '- Fill in concrete dates, names, and figures from context. Only leave blanks for genuinely unknown information.',
+    '- Produce a complete draft. Prefer a 90% complete document over asking clarifying questions.',
     '',
     'End with: "This is an AI-generated draft. Review all facts, names, dates, and regulatory references before use."',
   ];
@@ -281,11 +285,13 @@ OUTPUT FORMAT — CHAT MODE:
 `.trim();
 
 const DRAFT_SUFFIX = `
-OUTPUT FORMAT — DRAFT MODE ACTIVE: Respond as a structured, professional document with section headings, numbered steps where appropriate, and formal language. Use a format appropriate to the document type being requested.
-
-Before drafting, verify you have the necessary facts. If critical information is missing, ask for it first.
-
-End with: "This is an AI-generated draft. Review all facts, names, dates, and regulatory references before use."
+OUTPUT FORMAT — DRAFT MODE ACTIVE:
+- Respond as a structured, professional document with section headings, numbered steps, and formal language.
+- Use the building name, CMS ID, payer mix, census, and other building context you already have — do NOT use placeholders like [Insert Facility Name] or [Insert Date] when the information is available in your context.
+- Use today's date for document dates unless a specific date is provided.
+- Fill in as much concrete detail as possible from your context. Only leave blanks for information that is genuinely not available.
+- If truly critical information is missing and would make the draft misleading, ask for it — but prefer producing a 90% complete draft over asking questions.
+- End with: "This is an AI-generated draft. Review all facts, names, dates, and regulatory references before use."
 `.trim();
 
 

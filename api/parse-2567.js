@@ -121,7 +121,21 @@ function parseHeader(text) {
     }
   }
 
-  // Fallback: try to find a known IHCM building name
+  // Fallback: map provider number to known building name
+  if (!info.facility_name && info.provider_number) {
+    const PROVIDER_MAP = {
+      '045350': 'Nightingale at Arkadelphia',
+      '045437': 'Nightingale at Stonegate',
+      '045403': 'Nightingale at Glenwood',
+      '045176': 'The Woods',
+      '045190': 'Nightingale at Crossett',
+      '366335': 'Villa at Marymount',
+      '395042': 'Nightingale Erie',
+    };
+    info.facility_name = PROVIDER_MAP[info.provider_number] || null;
+  }
+
+  // Fallback: try to find a known IHCM building name in text
   if (!info.facility_name) {
     const knownNames = ['NIGHTINGALE', 'ARKADELPHIA', 'STONEGATE', 'GLENWOOD', 'THE WOODS', 'CROSSETT', 'MARYMOUNT', 'VILLA AT'];
     const topText = text.slice(0, 3000).toUpperCase();
@@ -165,13 +179,62 @@ function extractRegulation(text) {
 }
 
 function extractScopeSeverity(text) {
+  // Try explicit scope/severity markers
   let match = text.match(/(?:SCOPE|SEVERITY|S\/S)\s*[:\-]?\s*([A-L])\b/i);
   if (match) return match[1].toUpperCase();
-  match = text.match(/\b([D-L])\s*(?:\-|–)\s*(?:Isolated|Pattern|Widespread)/i);
-  return match ? match[1].toUpperCase() : null;
+
+  // Pattern: "D - Isolated" or "F - Pattern"
+  match = text.match(/\b([A-L])\s*(?:\-|–|—)\s*(?:Isolated|Pattern|Widespread)/i);
+  if (match) return match[1].toUpperCase();
+
+  // Pattern: "(D)" or "[D]" near scope/severity context
+  match = text.match(/(?:scope|severity|level|rating)\s*[:\-]?\s*[\(\[]([A-L])[\)\]]/i);
+  if (match) return match[1].toUpperCase();
+
+  // CMS form column pattern: single letter between form fields
+  // Look for standalone severity letter near "ISOLATED" "PATTERN" "WIDESPREAD"
+  match = text.match(/\b(Isolated|Pattern|Widespread)\b/i);
+  if (match) {
+    // Search nearby for a single letter A-L
+    const nearby = text.slice(Math.max(0, match.index - 50), match.index + match[0].length + 20);
+    const letterMatch = nearby.match(/\b([A-L])\b/);
+    if (letterMatch) return letterMatch[1].toUpperCase();
+  }
+
+  // Fallback: look for single uppercase letter A-L after a regulation citation
+  match = text.match(/48[23]\.\d+[^\n]*?\b([D-L])\b/);
+  if (match) return match[1].toUpperCase();
+
+  return null;
+}
+
+// CMS form boilerplate lines to strip from extracted text
+const FORM_NOISE = [
+  /FORM\s+CMS[\-\s]*2567/i,
+  /STATEMENT\s+OF\s+DEFICIENCIES/i,
+  /PROVIDER['']?S?\s+PLAN\s+OF\s+CORRECTION/i,
+  /PREFIX\s+TAG/i,
+  /SUMMARY\s+STATEMENT/i,
+  /ID\s+PREFIX\s+TAG/i,
+  /PRINTED:\s*\d/i,
+  /PAGE\s+\d+\s+OF\s+\d+/i,
+  /LABORATORY\s+DIRECTOR/i,
+  /STREET\s+ADDRESS.*CITY.*STATE/i,
+  /^\s*\(X\d\)/,
+  /^\s*X\d\s*$/,
+  /^\s*REGULATION\s*$/i,
+  /^\s*[A-L]\s*$/,  // standalone severity letter as line
+];
+
+function stripFormNoise(text) {
+  return text.split('\n')
+    .filter(line => !FORM_NOISE.some(pat => pat.test(line.trim())))
+    .join('\n');
 }
 
 function extractDeficientPractice(text) {
+  const cleaned = stripFormNoise(text);
+
   // Try explicit markers
   const patterns = [
     /(?:DEFICIENT\s+PRACTICE|DEFICIENCY)[:\-]?\s*(.+?)(?:\n\s*\n|\nFINDINGS)/is,
@@ -180,12 +243,12 @@ function extractDeficientPractice(text) {
   ];
 
   for (const pat of patterns) {
-    const match = text.match(pat);
+    const match = cleaned.match(pat);
     if (match) return match[1].trim().slice(0, 2000);
   }
 
-  // Fallback: first paragraph after tag line
-  const lines = text.split('\n');
+  // Fallback: first substantive paragraph after tag line
+  const lines = cleaned.split('\n');
   const contentLines = [];
   let started = false;
   for (let i = 1; i < lines.length; i++) {
@@ -194,6 +257,8 @@ function extractDeficientPractice(text) {
       if (started && contentLines.length) break;
       continue;
     }
+    // Skip short form-like lines
+    if (stripped.length < 15 && !/[a-z]/.test(stripped)) continue;
     started = true;
     contentLines.push(stripped);
     if (contentLines.join(' ').length > 500) break;
@@ -203,19 +268,21 @@ function extractDeficientPractice(text) {
 }
 
 function extractFindings(text) {
+  const cleaned = stripFormNoise(text);
+
   // Try specific markers
   const markers = ['FINDINGS', 'Based on', 'During observation', 'Review of',
     'Interview with', 'Observation on', 'Record review'];
 
   for (const marker of markers) {
-    const idx = text.toLowerCase().indexOf(marker.toLowerCase());
+    const idx = cleaned.toLowerCase().indexOf(marker.toLowerCase());
     if (idx >= 0) {
-      return text.slice(idx).trim().slice(0, 5000);
+      return cleaned.slice(idx).trim().slice(0, 5000);
     }
   }
 
-  // Aggressive fallback: skip header lines, take everything
-  const lines = text.split('\n');
+  // Fallback: skip header lines, take substantive content
+  const lines = cleaned.split('\n');
   let contentStart = 0;
   for (let i = 0; i < lines.length && i < 8; i++) {
     const stripped = lines[i].trim();
@@ -232,9 +299,8 @@ function extractFindings(text) {
   const findingsText = lines.slice(contentStart).join('\n').trim();
   if (findingsText) return findingsText.slice(0, 5000);
 
-  // Ultimate fallback
-  if (text.length > 150) return text.slice(100).trim().slice(0, 5000);
-  return text.trim().slice(0, 5000) || null;
+  if (text.length > 150) return stripFormNoise(text.slice(100)).trim().slice(0, 5000);
+  return stripFormNoise(text).trim().slice(0, 5000) || null;
 }
 
 function extractPocDue(text) {
@@ -424,15 +490,27 @@ export default async function handler(req, res) {
     const citations = parseCitations(fullText);
     const criticalTags = classifySeverity(citations);
 
+    // Assess parse quality for confidence banner
+    const nullSeverityCount = citations.filter(c => !c.scope_severity).length;
+    const hasValidName = headerInfo.facility_name && headerInfo.facility_name.length > 3;
+    const hasDate = !!headerInfo.survey_date;
+    const parseQuality = (citations.length > 0 && nullSeverityCount < citations.length / 2 && hasValidName && hasDate)
+      ? 'good'
+      : (citations.length > 0 ? 'partial' : 'poor');
+
     const result = {
       ...headerInfo,
       citations,
       total_citations: citations.length,
       critical_tags: criticalTags,
       raw_text_length: fullText.length,
+      parse_quality: parseQuality,
+      parse_warning: parseQuality !== 'good'
+        ? 'Auto-parsed from PDF. Please verify facility name, F-tags, and severity before use.'
+        : null,
     };
 
-    console.log(`[parse-2567] Parsed: ${citations.length} citations, ${fullText.length} chars text`);
+    console.log(`[parse-2567] Parsed: ${citations.length} citations, ${fullText.length} chars, quality: ${parseQuality}`);
 
     return res.status(200).json(result);
 

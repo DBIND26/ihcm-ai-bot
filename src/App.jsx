@@ -337,7 +337,12 @@ export default function App() {
         ? `\n\nCRITICAL TAGS: ${[...new Set(criticalTags)].join(', ')}`
         : '';
 
-      const uploadMessage = `I uploaded ${newDocs.length} survey(s):\n${surveyList}\n\nTotal ${allCitations.length} citation(s):\n${tagSummary}${criticalNote}\n\nPlease review these citations and give me specific POC guidance for each, prioritized by severity. The full findings text is available in your context.`;
+      const parseWarnings = newDocs.filter(d => d.parse_warning).map(d => d.parse_warning);
+      const qualityNote = parseWarnings.length > 0
+        ? `\n\nNOTE: ${parseWarnings[0]}`
+        : '';
+
+      const uploadMessage = `I uploaded ${newDocs.length} survey(s):\n${surveyList}\n\nTotal ${allCitations.length} citation(s):\n${tagSummary}${criticalNote}${qualityNote}\n\nPlease review these citations and give me specific POC guidance for each, prioritized by severity. The full findings text is available in your context.`;
 
       // Pass document context directly — don't rely on stale uploadedDocs state
       const freshDocumentContext = buildDocumentContext(allDocs);
@@ -912,7 +917,7 @@ export default function App() {
           }}
         >
           {isUploading ? 'Parsing...' : uploadedDocs.length > 0
-            ? `✓ ${uploadedDocs.length} survey(s) (${uploadedDocs.reduce((sum, d) => sum + (d.total_citations || 0), 0)} tags)`
+            ? `✓ ${uploadedDocs.length} survey(s) saved (${uploadedDocs.reduce((sum, d) => sum + (d.total_citations || 0), 0)} tags)`
             : 'Upload 2567'}
         </button>
 
@@ -1135,7 +1140,10 @@ export default function App() {
                         </span>
                       </div>
                       <div style={{ color: '#9ca3af', fontSize: '11px', marginTop: '2px' }}>
-                        {source.source_type}{source.state_code ? ` (${source.state_code})` : ''} — {source.citation_text?.slice(0, 60) || '...'}
+                        {source.source_type}{source.state_code ? ` (${source.state_code})` : ''}
+                        {source.current_version > 1 ? ` v${source.current_version}` : ''}
+                        {source.status === 'approved' ? ' — approved' : ''}
+                        {' — '}{source.citation_text?.slice(0, 50) || '...'}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
