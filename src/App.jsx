@@ -42,6 +42,11 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
 
+  // Census CSV upload state
+  const [isUploadingCensus, setIsUploadingCensus] = useState(false);
+  const [censusResult, setCensusResult] = useState(null); // { success, reportDate, buildings }
+  const censusInputRef = useRef(null);
+
   // Welcome guide state — guarded read for privacy-restricted browsers
   const [seenWelcome, setSeenWelcome] = useState(() => {
     try { return !!localStorage.getItem('ihcm_seen_welcome'); }
@@ -279,7 +284,43 @@ export default function App() {
     }
   };
 
-  // handleAddEvent moved to BuildingHistoryPanel component
+  // Handle census CSV upload
+  const handleCensusUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      setUploadError('Please upload a CSV file');
+      return;
+    }
+
+    setIsUploadingCensus(true);
+    setCensusResult(null);
+    setUploadError(null);
+
+    try {
+      const text = await file.text();
+      const response = await fetch('/api/ingest-census', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: text,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Census upload failed');
+      }
+
+      setCensusResult(data);
+      // Auto-clear after 10 seconds
+      setTimeout(() => setCensusResult(null), 10000);
+    } catch (err) {
+      setUploadError(err.message || 'Failed to upload census data');
+    } finally {
+      setIsUploadingCensus(false);
+      if (censusInputRef.current) censusInputRef.current.value = '';
+    }
+  };
 
   // Build document context string for the API — combines given docs array
   const buildDocumentContext = (docs) => {
@@ -703,6 +744,35 @@ export default function App() {
           {isUploading ? 'Parsing...' : uploadedDocs.length > 0
             ? `✓ ${uploadedDocs.length} survey(s) (${uploadedDocs.reduce((sum, d) => sum + (d.total_citations || 0), 0)} tags)`
             : 'Upload 2567'}
+        </button>
+
+        {/* Census CSV upload */}
+        <input
+          ref={censusInputRef}
+          type="file"
+          accept=".csv"
+          onChange={handleCensusUpload}
+          style={{ display: 'none' }}
+        />
+        <button
+          onClick={() => censusInputRef.current?.click()}
+          disabled={isUploadingCensus}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '6px',
+            border: '1px solid #d1d5db',
+            backgroundColor: censusResult ? '#dcfce7' : '#f3f4f6',
+            cursor: isUploadingCensus ? 'not-allowed' : 'pointer',
+            fontSize: '14px',
+            fontWeight: '500',
+            color: censusResult ? '#166534' : '#6b7280',
+            transition: 'all 0.2s ease',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          {isUploadingCensus ? 'Uploading...' : censusResult
+            ? `Census updated (${censusResult.buildings?.length} buildings)`
+            : 'Upload Census'}
         </button>
 
         {/* Building History toggle */}
