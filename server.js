@@ -34,6 +34,7 @@ const { default: verifyHandler } = await import('./api/verify-access.js');
 const { default: feedbackHandler } = await import('./api/feedback.js');
 const { default: conversationsHandler } = await import('./api/conversations.js');
 const { default: ingestCensusHandler } = await import('./api/ingest-census.js');
+const { default: dashboardHandler } = await import('./api/dashboard.js');
 const { default: ingestKnowledgeHandler } = await import('./api/ingest-knowledge.js');
 
 const PORT = 3001;
@@ -86,6 +87,13 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/conversations' && req.method === 'GET') {
       req.url = url.pathname + url.search; // preserve query string
       await conversationsHandler(req, resAdapter);
+      return;
+    }
+
+    // Route: /api/dashboard — portfolio dashboard data
+    if (url.pathname === '/api/dashboard' && req.method === 'GET') {
+      req.url = url.pathname + url.search;
+      await dashboardHandler(req, resAdapter);
       return;
     }
 

@@ -8,11 +8,14 @@ import AccessGate from './components/AccessGate.jsx';
 import MessageList from './components/MessageList.jsx';
 import BuildingHistoryPanel from './components/BuildingHistoryPanel.jsx';
 import ConversationHistoryPanel from './components/ConversationHistoryPanel.jsx';
+import Dashboard from './components/Dashboard.jsx';
 import { supabase } from './lib/supabase.js';
 
 export default function App() {
   // Access gate — session holds Supabase auth data
   const [userSession, setUserSession] = useState(null);
+  // View mode: 'chat' or 'dashboard'
+  const [viewMode, setViewMode] = useState('dashboard');
 
   // Helper: build auth headers for API calls
   const authHeaders = (extra = {}) => ({
@@ -682,10 +685,34 @@ export default function App() {
             {activeRole?.name} {activeBuildingId !== 'none' && `• ${activeBuildings.find(b => b.id === activeBuildingId)?.label || ''}`}
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            onClick={() => setViewMode(viewMode === 'dashboard' ? 'chat' : 'dashboard')}
+            style={{
+              padding: '6px 14px', borderRadius: '6px', fontSize: '13px', fontWeight: '600',
+              border: viewMode === 'dashboard' ? '2px solid #2563eb' : '1px solid #d1d5db',
+              backgroundColor: viewMode === 'dashboard' ? '#eff6ff' : 'transparent',
+              color: viewMode === 'dashboard' ? '#2563eb' : '#6b7280',
+              cursor: 'pointer', transition: 'all 0.2s',
+            }}
+          >
+            {viewMode === 'dashboard' ? 'Portfolio' : 'Portfolio'}
+          </button>
+          <button
+            onClick={() => setViewMode('chat')}
+            style={{
+              padding: '6px 14px', borderRadius: '6px', fontSize: '13px', fontWeight: '600',
+              border: viewMode === 'chat' ? '2px solid #2563eb' : '1px solid #d1d5db',
+              backgroundColor: viewMode === 'chat' ? '#eff6ff' : 'transparent',
+              color: viewMode === 'chat' ? '#2563eb' : '#6b7280',
+              cursor: 'pointer', transition: 'all 0.2s',
+            }}
+          >
+            Chat
+          </button>
           {userName && (
-            <span style={{ fontSize: '13px', color: '#6b7280' }}>
-              {userName}{userSession.appRole ? ` (${userSession.appRole.replace(/_/g, ' ')})` : ''}
+            <span style={{ fontSize: '13px', color: '#6b7280', marginLeft: '4px' }}>
+              {userName}
             </span>
           )}
           <button
@@ -701,6 +728,19 @@ export default function App() {
         </div>
       </header>
 
+      {/* Dashboard View */}
+      {viewMode === 'dashboard' && (
+        <Dashboard
+          authHeaders={authHeaders}
+          onSelectBuilding={(slug) => {
+            setActiveBuildingId(slug);
+            setViewMode('chat');
+          }}
+        />
+      )}
+
+      {/* Chat View */}
+      {viewMode === 'chat' && <>
       {/* Role Tabs */}
       <div
         className="ihcm-tabs"
@@ -1543,6 +1583,7 @@ export default function App() {
           }
         }
       `}</style>
+      </>}
     </div>
   );
 }
