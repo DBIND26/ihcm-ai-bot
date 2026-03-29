@@ -6,8 +6,8 @@ export default function RoleTabs({ activeRoleId, allowedRoles, onRoleChange }) {
       className="ihcm-tabs"
       style={{
         display: 'flex',
-        gap: '8px',
-        padding: '12px 24px',
+        gap: '6px',
+        padding: '10px 16px',
         backgroundColor: 'white',
         borderBottom: '1px solid #e5e7eb',
         overflowX: 'auto'
@@ -22,11 +22,11 @@ export default function RoleTabs({ activeRoleId, allowedRoles, onRoleChange }) {
             onClick={() => onRoleChange(roleId)}
             className={`ihcm-tab ${isActive ? 'ihcm-tab-active' : ''}`}
             style={{
-              padding: '8px 16px',
+              padding: '6px 12px',
               border: 'none',
               borderRadius: '6px',
               cursor: 'pointer',
-              fontSize: '14px',
+              fontSize: '13px',
               fontWeight: '500',
               backgroundColor: isActive ? role?.colorBg || '#e5e7eb' : 'transparent',
               color: isActive ? role?.color || '#1f2937' : '#6b7280',

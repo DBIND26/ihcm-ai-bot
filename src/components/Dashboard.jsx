@@ -50,7 +50,7 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
   }
 
   return (
-    <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
+    <div style={{ padding: '16px', maxWidth: '1200px', margin: '0 auto' }}>
       {/* Portfolio Summary */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px', marginBottom: '24px' }}>
         <SummaryCard label="Total Census" value={totals.total_census} sub={`/ ${totals.total_beds} beds`} />
@@ -66,7 +66,7 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
       </div>
 
       {/* Building Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
         {buildings.map(b => {
           const risk = RISK_COLORS[b.risk_label] || RISK_COLORS.stable;
           const occupancyPct = b.bed_capacity > 0 ? Math.round((b.census / b.bed_capacity) * 100) : 0;

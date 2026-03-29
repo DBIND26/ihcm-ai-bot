@@ -6,8 +6,8 @@ const ChatInput = forwardRef(function ChatInput({
   onInputChange, onSend, onClear, onClearDocs, onExport,
 }, ref) {
   return (
-    <div className="ihcm-input-area" style={{ padding: '16px 24px', backgroundColor: 'white', borderTop: '1px solid #e5e7eb' }}>
-      <div className="ihcm-input-wrapper" style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
+    <div className="ihcm-input-area" style={{ padding: '12px 16px', backgroundColor: 'white', borderTop: '1px solid #e5e7eb' }}>
+      <div className="ihcm-input-wrapper" style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
         <textarea
           ref={ref}
           value={inputText}

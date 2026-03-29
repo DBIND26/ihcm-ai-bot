@@ -790,22 +790,23 @@ export default function App() {
         style={{
           backgroundColor: 'white',
           borderBottom: '1px solid #e5e7eb',
-          padding: '16px 24px',
+          padding: '10px 16px',
           boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
         }}
       >
-        <div className="ihcm-header-content" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h1 className="ihcm-header-title" style={{ margin: '0 0 4px 0', fontSize: '20px', fontWeight: '600' }}>
-            IHCM AI Bot
-          </h1>
-          <p
-            className="ihcm-header-subtitle"
-            style={{ margin: 0, fontSize: '14px', color: '#6b7280' }}
-          >
-            {activeRole?.name} {activeBuildingId !== 'none' && `• ${activeBuildings.find(b => b.id === activeBuildingId)?.label || ''}`}
-          </p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="ihcm-header-content" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '4px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', minWidth: 0 }}>
+            <h1 className="ihcm-header-title" style={{ margin: 0, fontSize: '18px', fontWeight: '600', whiteSpace: 'nowrap' }}>
+              IHCM AI Bot
+            </h1>
+            <p
+              className="ihcm-header-subtitle"
+              style={{ margin: 0, fontSize: '13px', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >
+              {activeRole?.name} {activeBuildingId !== 'none' && `• ${activeBuildings.find(b => b.id === activeBuildingId)?.label || ''}`}
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
           <button
             onClick={() => setViewMode(viewMode === 'dashboard' ? 'chat' : 'dashboard')}
             style={{
@@ -859,6 +860,7 @@ export default function App() {
           >
             Sign out
           </button>
+          </div>
         </div>
       </header>
 

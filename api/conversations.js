@@ -121,7 +121,7 @@ export default async function handler(req, res) {
       .eq('user_id', userId)
       .eq('status', 'active')
       .order('updated_at', { ascending: false })
-      .limit(20);
+      .limit(50);
 
     if (facilityId) query = query.eq('facility_id', facilityId);
     if (roleId) query = query.eq('bot_id', roleId);
