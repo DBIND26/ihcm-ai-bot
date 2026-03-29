@@ -7,7 +7,18 @@
 // If BETA_ACCESS_CODE is not set, access is rejected (no open access).
 // On success, creates/resolves a beta_users row and returns the betaUserId.
 
+import { createHmac } from 'node:crypto';
 import { getOrCreateBetaUser } from './lib/betaUser.js';
+
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+
+function createSessionToken(name, secret) {
+  const normalizedName = String(name || '').trim().toLowerCase();
+  const expiresAt = Date.now() + SESSION_TTL_MS;
+  const payload = `${normalizedName}:${expiresAt}`;
+  const signature = createHmac('sha256', secret).update(payload).digest('hex');
+  return `${expiresAt}.${signature}`;
+}
 
 export default async function handler(req, res) {
   // CORS
@@ -59,5 +70,6 @@ export default async function handler(req, res) {
     }
   }
 
-  return res.status(200).json({ valid: true, betaUserId });
+  const sessionToken = createSessionToken(name, accessCode);
+  return res.status(200).json({ valid: true, betaUserId, sessionToken });
 }

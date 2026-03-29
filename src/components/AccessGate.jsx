@@ -55,10 +55,11 @@ export default function AccessGate({ onAuthenticated }) {
       const saved = sessionStorage.getItem('ihcm_session');
       if (saved) {
         const session = JSON.parse(saved);
-        if (session.userName && session.allowedRoles) {
+        if (session.userName && session.allowedRoles && session.sessionToken) {
           onAuthenticated(session);
           return;
         }
+        sessionStorage.removeItem('ihcm_session');
       }
     } catch (err) {
       console.warn('[IHCM] Session recovery failed:', err);
@@ -98,6 +99,7 @@ export default function AccessGate({ onAuthenticated }) {
         const session = {
           userName: name.trim(),
           selectedRole,
+          sessionToken: data.sessionToken,
           ...access,
         };
         sessionStorage.setItem('ihcm_session', JSON.stringify(session));

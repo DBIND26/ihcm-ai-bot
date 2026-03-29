@@ -52,6 +52,7 @@ export default function App() {
   const [playbookData, setPlaybookData] = useState({ title: '', source_type: 'corporate_playbook', content: '', state_code: '', tags: '' });
   const [isUploadingPlaybook, setIsUploadingPlaybook] = useState(false);
   const [playbookResult, setPlaybookResult] = useState(null);
+  const [knowledgeList, setKnowledgeList] = useState([]);
 
   // Welcome guide state — guarded read for privacy-restricted browsers
   const [seenWelcome, setSeenWelcome] = useState(() => {
@@ -340,11 +341,16 @@ export default function App() {
     try {
       const res = await fetch('/api/ingest-knowledge', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-IHCM-User': userSession?.userName || '',
+          'X-IHCM-Session-Token': userSession?.sessionToken || '',
+        },
         body: JSON.stringify({
           title: playbookData.title.trim(),
           source_type: playbookData.source_type,
           content: playbookData.content.trim(),
+          building_id: activeBuildingId !== 'none' ? activeBuildingId : undefined,
           state_code: playbookData.state_code || undefined,
           tags: playbookData.tags ? playbookData.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
         }),
@@ -355,10 +361,49 @@ export default function App() {
       setPlaybookData({ title: '', source_type: 'corporate_playbook', content: '', state_code: '', tags: '' });
       setShowPlaybookForm(false);
       setTimeout(() => setPlaybookResult(null), 8000);
+      fetchKnowledgeList(); // refresh list
     } catch (err) {
       setUploadError(err.message || 'Failed to upload playbook');
     } finally {
       setIsUploadingPlaybook(false);
+    }
+  };
+
+  // Fetch knowledge source list from server
+  const fetchKnowledgeList = async () => {
+    try {
+      const res = await fetch('/api/ingest-knowledge?status=all', {
+        headers: {
+          'X-IHCM-User': userSession?.userName || '',
+          'X-IHCM-Session-Token': userSession?.sessionToken || '',
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setKnowledgeList(data.sources || []);
+      }
+    } catch (err) {
+      console.warn('[IHCM] Failed to fetch knowledge list:', err);
+    }
+  };
+
+  // Approve or archive a knowledge source
+  const handleKnowledgeAction = async (sourceId, newStatus) => {
+    try {
+      const res = await fetch('/api/ingest-knowledge', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-IHCM-User': userSession?.userName || '',
+          'X-IHCM-Session-Token': userSession?.sessionToken || '',
+        },
+        body: JSON.stringify({ source_id: sourceId, status: newStatus }),
+      });
+      if (res.ok) {
+        fetchKnowledgeList(); // refresh
+      }
+    } catch (err) {
+      console.warn('[IHCM] Knowledge action failed:', err);
     }
   };
 
@@ -817,7 +862,7 @@ export default function App() {
 
         {/* Knowledge/Playbook upload */}
         <button
-          onClick={() => setShowPlaybookForm(!showPlaybookForm)}
+          onClick={() => { setShowPlaybookForm(!showPlaybookForm); if (!showPlaybookForm) fetchKnowledgeList(); }}
           style={{
             padding: '8px 16px',
             borderRadius: '6px',
@@ -831,7 +876,7 @@ export default function App() {
             whiteSpace: 'nowrap'
           }}
         >
-          {playbookResult ? 'Playbook saved!' : 'Add Playbook'}
+          {playbookResult ? 'Playbook queued' : 'Add Playbook'}
         </button>
 
         {/* Building History toggle */}
@@ -964,7 +1009,7 @@ export default function App() {
                   color: 'white', cursor: (playbookData.title.trim() && playbookData.content.trim()) ? 'pointer' : 'not-allowed',
                   fontSize: '13px', fontWeight: '600',
                 }}>
-                {isUploadingPlaybook ? 'Saving...' : 'Save to Knowledge Base'}
+                {isUploadingPlaybook ? 'Submitting...' : 'Submit to Knowledge Base'}
               </button>
               <button onClick={() => setShowPlaybookForm(false)}
                 style={{
@@ -974,10 +1019,67 @@ export default function App() {
                 Cancel
               </button>
               <span style={{ fontSize: '12px', color: '#9ca3af', marginLeft: 'auto' }}>
-                Content will be available to the bot in all future conversations
+                New knowledge is saved as draft and will appear after approval
               </span>
             </div>
           </div>
+
+          {/* Recent Knowledge Sources */}
+          {knowledgeList.length > 0 && (
+            <div style={{ marginTop: '16px', borderTop: '1px solid #e5e7eb', paddingTop: '12px' }}>
+              <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: '600', color: '#4b5563', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Knowledge Base ({knowledgeList.length})
+              </h4>
+              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                {knowledgeList.map(source => (
+                  <div key={source.source_id} style={{
+                    padding: '8px 12px', backgroundColor: 'white', borderRadius: '4px',
+                    border: '1px solid #e5e7eb', marginBottom: '4px', fontSize: '13px',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px',
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{source.title}</strong>
+                        <span style={{
+                          fontSize: '10px', padding: '1px 6px', borderRadius: '4px',
+                          backgroundColor: source.status === 'approved' ? '#dcfce7' : source.status === 'draft' ? '#fef3c7' : '#f3f4f6',
+                          color: source.status === 'approved' ? '#166534' : source.status === 'draft' ? '#92400e' : '#6b7280',
+                          fontWeight: '600', textTransform: 'uppercase', flexShrink: 0,
+                        }}>
+                          {source.status}
+                        </span>
+                      </div>
+                      <div style={{ color: '#9ca3af', fontSize: '11px', marginTop: '2px' }}>
+                        {source.source_type}{source.state_code ? ` (${source.state_code})` : ''} — {source.citation_text?.slice(0, 60) || '...'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                      {source.status === 'draft' && (
+                        <button onClick={() => handleKnowledgeAction(source.source_id, 'approved')}
+                          style={{
+                            padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
+                            border: '1px solid #16a34a', backgroundColor: '#f0fdf4',
+                            color: '#166534', cursor: 'pointer', fontWeight: '500',
+                          }}>
+                          Approve
+                        </button>
+                      )}
+                      {source.status !== 'archived' && (
+                        <button onClick={() => handleKnowledgeAction(source.source_id, 'archived')}
+                          style={{
+                            padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
+                            border: '1px solid #d1d5db', backgroundColor: 'transparent',
+                            color: '#9ca3af', cursor: 'pointer', fontWeight: '500',
+                          }}>
+                          Archive
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

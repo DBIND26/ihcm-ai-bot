@@ -338,7 +338,7 @@ async function fetchGlobalCore() {
  * Fetch relevant knowledge sources for the current role and building.
  * Returns a formatted text block, or null if none found.
  */
-async function fetchKnowledgeContext(roleId, buildingId, stateCode) {
+async function fetchKnowledgeContext(roleId, facilityId, stateCode) {
   if (!supabase) return null;
 
   try {
@@ -353,30 +353,61 @@ async function fetchKnowledgeContext(roleId, buildingId, stateCode) {
 
     const types = roleSourceTypes[roleId] || ['corporate_playbook', 'operator_practice'];
 
-    let query = supabase
+    const collected = [];
+    const seenSourceIds = new Set();
+
+    const collectSources = (rows) => {
+      for (const row of rows || []) {
+        if (!row?.source_id || seenSourceIds.has(row.source_id)) continue;
+        seenSourceIds.add(row.source_id);
+        collected.push(row);
+      }
+    };
+
+    if (facilityId) {
+      const { data: facilitySources, error: facilityError } = await supabase
+        .from('knowledge_sources')
+        .select('source_id, title, source_type, citation_text, full_content, state_code, facility_id, tags')
+        .eq('status', 'approved')
+        .eq('facility_id', facilityId)
+        .in('source_type', types)
+        .order('updated_at', { ascending: false })
+        .limit(3);
+
+      if (facilityError) return null;
+      collectSources(facilitySources);
+    }
+
+    let scopeQuery = supabase
       .from('knowledge_sources')
-      .select('title, source_type, citation_text, full_content, state_code, tags')
+      .select('source_id, title, source_type, citation_text, full_content, state_code, facility_id, tags')
       .eq('status', 'approved')
+      .is('facility_id', null)
       .in('source_type', types)
       .order('updated_at', { ascending: false })
       .limit(5);
 
-    // Filter by state if building has one
     if (stateCode) {
-      query = query.or(`state_code.eq.${stateCode},state_code.is.null`);
+      scopeQuery = scopeQuery.or(`state_code.eq.${stateCode},state_code.is.null`);
+    } else {
+      scopeQuery = scopeQuery.is('state_code', null);
     }
 
-    const { data, error } = await query;
-    if (error || !data?.length) return null;
+    const { data: scopedSources, error: scopeError } = await scopeQuery;
+    if (scopeError) return null;
+    collectSources(scopedSources);
+
+    if (!collected.length) return null;
 
     // Format knowledge sources into context block (max 15K chars total)
     const parts = [];
     let totalLen = 0;
     const MAX_KNOWLEDGE = 15000;
 
-    for (const source of data) {
+    for (const source of collected) {
       const content = source.full_content || source.citation_text || '';
-      const chunk = `=== ${source.title} (${source.source_type}${source.state_code ? ', ' + source.state_code : ''}) ===\n${content.slice(0, 3000)}`;
+      const scopeLabel = source.facility_id ? 'facility' : (source.state_code || 'portfolio');
+      const chunk = `=== ${source.title} (${source.source_type}, ${scopeLabel}) ===\n${content.slice(0, 3000)}`;
       if (totalLen + chunk.length > MAX_KNOWLEDGE) break;
       parts.push(chunk);
       totalLen += chunk.length;
@@ -591,7 +622,8 @@ export default async function handler(req, res) {
     // ── Fetch context layers ──
     const buildingContext = await fetchBuildingContext(buildingId);
     const stateCode = buildingContext?.state || null;
-    const knowledgeContext = await fetchKnowledgeContext(botId, buildingId, stateCode);
+    const facilityId = buildingContext?.facility_id || null;
+    const knowledgeContext = await fetchKnowledgeContext(botId, facilityId, stateCode);
 
     // ── Assemble system prompt ──
     const systemPrompt = assembleSystemPrompt({
