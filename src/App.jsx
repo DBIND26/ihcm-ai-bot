@@ -836,11 +836,14 @@ export default function App() {
 
       {/* Admin View */}
       {viewMode === 'admin' && (
-        <AdminDashboard authHeaders={authHeaders} />
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          <AdminDashboard authHeaders={authHeaders} />
+        </div>
       )}
 
       {/* Dashboard View */}
       {viewMode === 'dashboard' && (
+        <div style={{ flex: 1, overflowY: 'auto' }}>
         <Dashboard
           authHeaders={authHeaders}
           onSelectBuilding={(slug) => {
@@ -848,6 +851,7 @@ export default function App() {
             setViewMode('chat');
           }}
         />
+        </div>
       )}
 
       {/* Chat View */}
