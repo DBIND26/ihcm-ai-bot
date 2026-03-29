@@ -131,17 +131,34 @@ export default function App() {
     });
   }, [activeRoleId, activeBuildingId, userSession]);
 
-  // Load building history when building changes
+  // Load building history from Supabase when building changes
   useEffect(() => {
-    if (activeBuildingId && activeBuildingId !== 'none') {
-      setHistoryData(getBuildingHistory(activeBuildingId));
-    } else {
-      setHistoryData({ surveys: [], events: [] });
-    }
-    // Clear uploaded docs when building changes
     setUploadedDocs([]);
     setUploadError(null);
-  }, [activeBuildingId]);
+
+    if (!activeBuildingId || activeBuildingId === 'none' || !userSession?.accessToken) {
+      setHistoryData({ surveys: [], events: [] });
+      return;
+    }
+
+    const loadHistory = async () => {
+      try {
+        const res = await fetch(`/api/building-history?building=${activeBuildingId}`, {
+          headers: authHeaders(),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setHistoryData(data);
+        } else {
+          // Fall back to localStorage
+          setHistoryData(getBuildingHistory(activeBuildingId));
+        }
+      } catch {
+        setHistoryData(getBuildingHistory(activeBuildingId));
+      }
+    };
+    loadHistory();
+  }, [activeBuildingId, userSession]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -1140,9 +1157,23 @@ export default function App() {
           activeBuildingId={activeBuildingId}
           activeBuildings={activeBuildings}
           historyData={historyData}
-          onAddEvent={(eventData) => {
-            addEvent(activeBuildingId, eventData);
-            setHistoryData(getBuildingHistory(activeBuildingId));
+          onAddEvent={async (eventData) => {
+            try {
+              const res = await fetch('/api/building-history', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({ buildingId: activeBuildingId, ...eventData }),
+              });
+              if (res.ok) {
+                // Reload from server
+                const histRes = await fetch(`/api/building-history?building=${activeBuildingId}`, { headers: authHeaders() });
+                if (histRes.ok) setHistoryData(await histRes.json());
+              }
+            } catch {
+              // Fallback to localStorage
+              addEvent(activeBuildingId, eventData);
+              setHistoryData(getBuildingHistory(activeBuildingId));
+            }
           }}
         />
       )}

@@ -34,6 +34,8 @@ const { default: feedbackHandler } = await import('./api/feedback.js');
 const { default: conversationsHandler } = await import('./api/conversations.js');
 const { default: ingestCensusHandler } = await import('./api/ingest-census.js');
 const { default: dashboardHandler } = await import('./api/dashboard.js');
+const { default: ingestCmsSurveysHandler } = await import('./api/ingest-cms-surveys.js');
+const { default: buildingHistoryHandler } = await import('./api/building-history.js');
 const { default: ingestKnowledgeHandler } = await import('./api/ingest-knowledge.js');
 
 const PORT = 3001;
@@ -85,6 +87,28 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/dashboard' && req.method === 'GET') {
       req.url = url.pathname + url.search;
       await dashboardHandler(req, resAdapter);
+      return;
+    }
+
+    // Route: /api/building-history — building surveys and events
+    if (url.pathname === '/api/building-history') {
+      if (req.method === 'GET') {
+        req.url = url.pathname + url.search;
+        await buildingHistoryHandler(req, resAdapter);
+        return;
+      }
+      if (req.method === 'POST') {
+        let body = '';
+        for await (const chunk of req) { body += chunk; }
+        try { req.body = JSON.parse(body); } catch { req.body = {}; }
+        await buildingHistoryHandler(req, resAdapter);
+        return;
+      }
+    }
+
+    // Route: /api/ingest-cms-surveys — CMS survey data ingestion
+    if (url.pathname === '/api/ingest-cms-surveys' && req.method === 'POST') {
+      await ingestCmsSurveysHandler(req, resAdapter);
       return;
     }
 
