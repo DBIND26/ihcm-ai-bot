@@ -36,6 +36,7 @@ const { default: ingestCensusHandler } = await import('./api/ingest-census.js');
 const { default: dashboardHandler } = await import('./api/dashboard.js');
 const { default: ingestCmsSurveysHandler } = await import('./api/ingest-cms-surveys.js');
 const { default: ingestSwotHandler } = await import('./api/ingest-swot.js');
+const { default: adminHandler } = await import('./api/admin.js');
 const { default: buildingHistoryHandler } = await import('./api/building-history.js');
 const { default: ingestKnowledgeHandler } = await import('./api/ingest-knowledge.js');
 
@@ -105,6 +106,13 @@ const server = http.createServer(async (req, res) => {
         await buildingHistoryHandler(req, resAdapter);
         return;
       }
+    }
+
+    // Route: /api/admin — admin dashboard data
+    if (url.pathname === '/api/admin' && req.method === 'GET') {
+      req.url = url.pathname + url.search;
+      await adminHandler(req, resAdapter);
+      return;
     }
 
     // Route: /api/ingest-swot — SWOT analysis upload

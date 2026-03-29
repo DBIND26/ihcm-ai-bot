@@ -9,6 +9,7 @@ import MessageList from './components/MessageList.jsx';
 import BuildingHistoryPanel from './components/BuildingHistoryPanel.jsx';
 import ConversationHistoryPanel from './components/ConversationHistoryPanel.jsx';
 import Dashboard from './components/Dashboard.jsx';
+import AdminDashboard from './components/AdminDashboard.jsx';
 import { supabase } from './lib/supabase.js';
 
 export default function App() {
@@ -801,6 +802,20 @@ export default function App() {
           >
             Chat
           </button>
+          {['super_admin', 'corporate_admin'].includes(userSession.appRole) && (
+            <button
+              onClick={() => setViewMode('admin')}
+              style={{
+                padding: '6px 14px', borderRadius: '6px', fontSize: '13px', fontWeight: '600',
+                border: viewMode === 'admin' ? '2px solid #dc2626' : '1px solid #d1d5db',
+                backgroundColor: viewMode === 'admin' ? '#fef2f2' : 'transparent',
+                color: viewMode === 'admin' ? '#dc2626' : '#6b7280',
+                cursor: 'pointer', transition: 'all 0.2s',
+              }}
+            >
+              Admin
+            </button>
+          )}
           {userName && (
             <span style={{ fontSize: '13px', color: '#6b7280', marginLeft: '4px' }}>
               {userName}
@@ -818,6 +833,11 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {/* Admin View */}
+      {viewMode === 'admin' && (
+        <AdminDashboard authHeaders={authHeaders} />
+      )}
 
       {/* Dashboard View */}
       {viewMode === 'dashboard' && (
