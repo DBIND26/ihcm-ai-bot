@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ROLES, getRoleById, getRoleIds } from '../v2_definitive/src/bots.js';
 import { BUILDINGS, getActiveBuildings } from '../v2_definitive/src/buildings.js';
 import { WORKFLOWS, getWorkflowsForRole } from '../v2_definitive/src/workflows.js';
-import { loadMessages, saveMessages, clearMessages } from './storage.js';
+import { loadMessages, saveMessages, clearMessages, listConversations } from './storage.js';
 import {
   addSurvey, getSurveys, getLatestSurvey,
   addEvent, getEvents,
@@ -889,6 +889,29 @@ export default function App() {
               : ''}
           </button>
         )}
+
+        {/* New Chat button — pushed to the right */}
+        <div style={{ marginLeft: 'auto' }}>
+          <button
+            onClick={() => {
+              handleClearConversation();
+              setUploadedDocs([]);
+            }}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '6px',
+              border: '1px solid #2563eb',
+              backgroundColor: '#eff6ff',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '600',
+              color: '#2563eb',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            + New Chat
+          </button>
+        </div>
       </div>
 
       {/* Upload error */}
@@ -1231,16 +1254,48 @@ export default function App() {
               alignItems: 'center',
               justifyContent: 'center',
               flexDirection: 'column',
-              color: '#9ca3af',
-              textAlign: 'center'
+              color: '#6b7280',
+              textAlign: 'center',
+              padding: '24px',
+              maxWidth: '520px',
+              margin: '0 auto',
             }}
           >
-            <p style={{ fontSize: '16px', margin: '0 0 8px 0' }}>
-              Start a conversation with {activeRole?.name}
+            <p style={{ fontSize: '18px', margin: '0 0 12px 0', fontWeight: '600', color: '#1f2937' }}>
+              {activeRole?.name || 'IHCM AI Bot'}
             </p>
-            <p style={{ fontSize: '14px', margin: 0 }}>
-              {isDraft ? 'Draft mode enabled' : 'Ready to assist'}
-            </p>
+
+            {/* Welcome guide — shows tips for new users */}
+            {!localStorage.getItem('ihcm_seen_welcome') ? (
+              <div style={{ textAlign: 'left', fontSize: '14px', lineHeight: '1.6', color: '#4b5563' }}>
+                <p style={{ margin: '0 0 10px 0' }}>Welcome to the IHCM AI Bot! Here's how to get started:</p>
+                <p style={{ margin: '0 0 6px 0' }}><strong>Role tabs</strong> — Switch between DON, MDS, Billing, Admin, and Regional views at the top. Each has specialized knowledge.</p>
+                <p style={{ margin: '0 0 6px 0' }}><strong>Building selector</strong> — Pick a building to get facility-specific answers (payer mix, staffing context, survey history).</p>
+                <p style={{ margin: '0 0 6px 0' }}><strong>Upload 2567</strong> — Upload your CMS Statement of Deficiencies PDF and the bot will analyze every citation with POC guidance.</p>
+                <p style={{ margin: '0 0 6px 0' }}><strong>Draft Mode</strong> — Toggle this on to have the bot write formal documents (POC responses, appeal letters, policy drafts).</p>
+                <p style={{ margin: '0 0 12px 0' }}><strong>+ New Chat</strong> — Start a fresh conversation anytime. Your history is saved per role and building.</p>
+                <button
+                  onClick={() => { try { localStorage.setItem('ihcm_seen_welcome', '1'); } catch {} }}
+                  style={{
+                    padding: '6px 14px', borderRadius: '6px', border: '1px solid #d1d5db',
+                    backgroundColor: 'white', cursor: 'pointer', fontSize: '13px', color: '#6b7280'
+                  }}
+                >
+                  Got it, don't show again
+                </button>
+              </div>
+            ) : (
+              <div>
+                <p style={{ fontSize: '14px', margin: '0 0 4px 0' }}>
+                  {isDraft ? 'Draft mode — ready to write formal documents' : 'Ask a question or pick a starter prompt below'}
+                </p>
+                <p style={{ fontSize: '13px', margin: 0, color: '#9ca3af' }}>
+                  {activeBuildingId !== 'none'
+                    ? `Answering for ${activeBuildings.find(b => b.id === activeBuildingId)?.label || activeBuildingId}`
+                    : 'No building selected — answers will be general'}
+                </p>
+              </div>
+            )}
           </div>
         ) : (
           messages.map((msg, idx) => (

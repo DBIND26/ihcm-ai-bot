@@ -52,3 +52,25 @@ export function clearAllMessages() {
     // no-op
   }
 }
+
+/**
+ * Get all conversation keys that have messages, with preview info.
+ * Returns array of { key, roleId, buildingId, messageCount, lastMessage }
+ */
+export function listConversations() {
+  const store = getStore();
+  return Object.entries(store)
+    .filter(([, msgs]) => msgs && msgs.length > 0)
+    .map(([key, msgs]) => {
+      const [roleId, buildingId] = key.split('::');
+      const lastMsg = msgs[msgs.length - 1];
+      return {
+        key,
+        roleId,
+        buildingId: buildingId || 'none',
+        messageCount: msgs.length,
+        lastMessage: lastMsg?.content?.slice(0, 80) || '',
+        lastRole: lastMsg?.role || 'user',
+      };
+    });
+}

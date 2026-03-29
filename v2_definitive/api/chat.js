@@ -20,7 +20,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
 import { getRoleById } from '../src/bots.js';
-import { getBuildingById } from '../src/buildings.js';
+import { getBuildingById, getBuildingProfile } from '../src/buildings.js';
 import { getWorkflowById } from '../src/workflows.js';
 
 // ── Configuration ──
@@ -332,6 +332,9 @@ async function fetchGlobalCore() {
 function buildBuildingContextFallback(buildingId) {
   const building = getBuildingById(buildingId);
   if (!building || building.id === 'none') return null;
+
+  const profile = getBuildingProfile(buildingId);
+
   return {
     label: building.label,
     short_name: building.shortName,
@@ -341,7 +344,19 @@ function buildBuildingContextFallback(buildingId) {
     market_type: building.marketType,
     strategic_status: building.strategicStatus,
     strategic_label: building.strategicLabel,
-    // Snapshot and intelligence fields will be null — that's fine for fallback
+    // Profile fields (snake_case to match Supabase column names)
+    payer_context: profile?.payerContext || null,
+    market_summary: profile?.marketSummary || null,
+    referral_summary: profile?.referralSummary || null,
+    physician_relationships: profile?.physicianRelationships || null,
+    hospital_partners: profile?.hospitalPartners || null,
+    growth_barriers: profile?.growthBarriers || null,
+    growth_opportunities: profile?.growthOpportunities || null,
+    survey_context: profile?.surveyContext || null,
+    staffing_context: profile?.staffingContext || null,
+    reimbursement_context: profile?.reimbursementContext || null,
+    risk_watchlist: profile?.riskWatchlist || null,
+    strategic_notes: profile?.strategicNotes || null,
   };
 }
 
