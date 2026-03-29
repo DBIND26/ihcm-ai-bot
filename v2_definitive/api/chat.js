@@ -386,6 +386,35 @@ function getCorsHeaders(origin) {
 
 
 // ════════════════════════════════════════════════════════════════════════════
+// RATE LIMITING — simple in-memory per-IP throttle
+// ════════════════════════════════════════════════════════════════════════════
+
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX = 15;            // max 15 requests per minute per IP
+const rateLimitMap = new Map();
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW) {
+    rateLimitMap.set(ip, { windowStart: now, count: 1 });
+    return false;
+  }
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) return true;
+  return false;
+}
+
+// Clean up stale entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap) {
+    if (now - entry.windowStart > RATE_LIMIT_WINDOW * 2) rateLimitMap.delete(ip);
+  }
+}, 5 * 60 * 1000);
+
+
+// ════════════════════════════════════════════════════════════════════════════
 // MAIN HANDLER — POST /api/chat
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -402,6 +431,13 @@ export default async function handler(req, res) {
   // Method check
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // Rate limit check
+  const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+    || req.socket?.remoteAddress || 'unknown';
+  if (isRateLimited(clientIp)) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a moment and try again.' });
   }
 
   // Request size check

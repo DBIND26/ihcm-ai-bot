@@ -10,7 +10,113 @@ import {
   EVENT_CATEGORIES,
 } from './buildingHistory.js';
 
+// ── Access Gate Component ──
+function AccessGate({ onAuthenticated }) {
+  const [code, setCode] = useState('');
+  const [error, setError] = useState(null);
+  const [checking, setChecking] = useState(true);
+
+  // Check if already authenticated
+  useEffect(() => {
+    const saved = sessionStorage.getItem('ihcm_access');
+    if (saved === 'granted') {
+      onAuthenticated();
+      return;
+    }
+    // Check if access code is even required
+    fetch('/api/verify-access', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: '' }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.valid) {
+          sessionStorage.setItem('ihcm_access', 'granted');
+          onAuthenticated();
+        } else {
+          setChecking(false);
+        }
+      })
+      .catch(() => setChecking(false));
+  }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    try {
+      const res = await fetch('/api/verify-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code.trim() }),
+      });
+      const data = await res.json();
+      if (data.valid) {
+        sessionStorage.setItem('ihcm_access', 'granted');
+        onAuthenticated();
+      } else {
+        setError('Invalid access code');
+      }
+    } catch {
+      setError('Connection error — try again');
+    }
+  };
+
+  if (checking) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Inter, system-ui, sans-serif' }}>
+        <p style={{ color: '#6b7280' }}>Loading...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: '100vh', fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#f9fafb'
+    }}>
+      <form onSubmit={handleSubmit} style={{
+        backgroundColor: 'white', padding: '40px', borderRadius: '12px',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.1)', width: '360px', textAlign: 'center'
+      }}>
+        <h1 style={{ margin: '0 0 8px 0', fontSize: '22px', fontWeight: '600', color: '#1f2937' }}>
+          IHCM AI Bot
+        </h1>
+        <p style={{ margin: '0 0 24px 0', fontSize: '14px', color: '#6b7280' }}>
+          Enter your team access code
+        </p>
+        <input
+          type="password"
+          value={code}
+          onChange={e => setCode(e.target.value)}
+          placeholder="Access code"
+          autoFocus
+          style={{
+            width: '100%', padding: '12px 16px', borderRadius: '8px',
+            border: '1px solid #d1d5db', fontSize: '16px', fontFamily: 'inherit',
+            boxSizing: 'border-box', marginBottom: '12px'
+          }}
+        />
+        {error && <p style={{ color: '#dc2626', fontSize: '13px', margin: '0 0 12px 0' }}>{error}</p>}
+        <button type="submit" style={{
+          width: '100%', padding: '12px', borderRadius: '8px', border: 'none',
+          backgroundColor: '#2563eb', color: 'white', fontSize: '15px',
+          fontWeight: '600', cursor: 'pointer'
+        }}>
+          Enter
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export default function App() {
+  // Access gate
+  const [authenticated, setAuthenticated] = useState(false);
+
+  // Feedback state: { [messageIndex]: 'useful' | 'not_useful' | 'wrong' }
+  const [feedback, setFeedback] = useState({});
+
   // State management
   const [activeRoleId, setActiveRoleId] = useState('don');
   const [activeBuildingId, setActiveBuildingId] = useState('none');
@@ -336,6 +442,26 @@ export default function App() {
     setError(null);
     setActiveWorkflowId(null);
     setWorkflowInputs({});
+    setFeedback({});
+  };
+
+  // Handle feedback on a message
+  const handleFeedback = (msgIndex, type) => {
+    setFeedback(prev => ({ ...prev, [msgIndex]: type }));
+    // Store feedback in localStorage for later review
+    try {
+      const feedbackLog = JSON.parse(localStorage.getItem('ihcm_feedback') || '[]');
+      feedbackLog.push({
+        type,
+        role: activeRoleId,
+        building: activeBuildingId,
+        messageIndex: msgIndex,
+        messagePreview: messages[msgIndex]?.content?.slice(0, 100),
+        userQuestion: messages[msgIndex - 1]?.content?.slice(0, 100),
+        timestamp: new Date().toISOString(),
+      });
+      localStorage.setItem('ihcm_feedback', JSON.stringify(feedbackLog));
+    } catch {}
   };
 
   // Format markdown-like content
@@ -401,6 +527,11 @@ export default function App() {
   // Get workflows for current role
   const roleWorkflows = getWorkflowsForRole(activeRoleId);
   const activeWorkflow = activeWorkflowId ? WORKFLOWS[activeWorkflowId] : null;
+
+  // Access gate
+  if (!authenticated) {
+    return <AccessGate onAuthenticated={() => setAuthenticated(true)} />;
+  }
 
   return (
     <div
@@ -968,6 +1099,33 @@ export default function App() {
                     </div>
                   )}
                 </div>
+                {/* Feedback buttons for assistant messages */}
+                {msg.role === 'assistant' && (
+                  <div style={{
+                    display: 'flex', gap: '6px', marginTop: '8px', paddingTop: '6px',
+                    borderTop: '1px solid rgba(0,0,0,0.06)'
+                  }}>
+                    {[
+                      { type: 'useful', label: 'Useful', icon: '\u2191' },
+                      { type: 'not_useful', label: 'Not useful', icon: '\u2193' },
+                      { type: 'wrong', label: 'Wrong', icon: '!' },
+                    ].map(fb => (
+                      <button
+                        key={fb.type}
+                        onClick={() => handleFeedback(idx, fb.type)}
+                        style={{
+                          padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
+                          border: feedback[idx] === fb.type ? '1px solid #2563eb' : '1px solid #d1d5db',
+                          backgroundColor: feedback[idx] === fb.type ? '#dbeafe' : 'transparent',
+                          color: feedback[idx] === fb.type ? '#1e40af' : '#9ca3af',
+                          cursor: 'pointer', fontWeight: '500',
+                        }}
+                      >
+                        {fb.icon} {fb.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ))

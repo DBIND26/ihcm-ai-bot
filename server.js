@@ -29,6 +29,7 @@ try {
 
 import chatHandler from './v2_definitive/api/chat.js';
 import parseHandler from './api/parse-2567.js';
+import verifyHandler from './api/verify-access.js';
 
 const PORT = 3001;
 
@@ -58,6 +59,15 @@ const server = http.createServer(async (req, res) => {
   };
 
   try {
+    // Route: /api/verify-access — password gate
+    if (url.pathname === '/api/verify-access' && req.method === 'POST') {
+      let body = '';
+      for await (const chunk of req) { body += chunk; }
+      try { req.body = JSON.parse(body); } catch { req.body = {}; }
+      await verifyHandler(req, resAdapter);
+      return;
+    }
+
     // Route: /api/parse-2567 — PDF upload (multipart or raw)
     if (url.pathname === '/api/parse-2567' && req.method === 'POST') {
       await parseHandler(req, resAdapter);
