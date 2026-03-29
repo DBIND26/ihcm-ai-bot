@@ -10,33 +10,98 @@ import {
   EVENT_CATEGORIES,
 } from './buildingHistory.js';
 
+// ── Role/Building access rules ──
+// DON, MDS, Admin = their role only, their building(s) only
+// Billing = billing only, all buildings
+// Regional = all roles EXCEPT billing, all buildings
+// Dov = everything
+
+const ROLE_OPTIONS = [
+  { id: 'don', label: 'Director of Nursing (DON)', needsBuilding: true },
+  { id: 'mds', label: 'MDS Coordinator', needsBuilding: true },
+  { id: 'billing', label: 'Billing & RCM', needsBuilding: false },
+  { id: 'admin', label: 'Facility Administrator', needsBuilding: true },
+  { id: 'regional', label: 'Regional Operations', needsBuilding: false },
+];
+
+function getUserAccess(userName, selectedRole, selectedBuildings) {
+  const nameLower = (userName || '').toLowerCase().trim();
+
+  // Dov gets everything
+  if (nameLower === 'dov' || nameLower === 'dov braun' || nameLower.includes('dbraun')) {
+    return {
+      allowedRoles: ['mds', 'don', 'billing', 'admin', 'regional'],
+      allowedBuildings: null, // null = all buildings
+    };
+  }
+
+  // Regional: all roles except billing, all buildings
+  if (selectedRole === 'regional') {
+    return {
+      allowedRoles: ['mds', 'don', 'admin', 'regional'],
+      allowedBuildings: null,
+    };
+  }
+
+  // Billing: billing only, all buildings
+  if (selectedRole === 'billing') {
+    return {
+      allowedRoles: ['billing'],
+      allowedBuildings: null,
+    };
+  }
+
+  // DON, MDS, Admin: their role only, their building(s) only
+  return {
+    allowedRoles: [selectedRole],
+    allowedBuildings: selectedBuildings.length > 0 ? selectedBuildings : null,
+  };
+}
+
 // ── Access Gate Component ──
 function AccessGate({ onAuthenticated }) {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
+  const [selectedRole, setSelectedRole] = useState('');
+  const [selectedBuildings, setSelectedBuildings] = useState([]);
   const [error, setError] = useState(null);
   const [checking, setChecking] = useState(true);
 
-  // Check if already authenticated (saved in sessionStorage)
+  const activeBuildings = getActiveBuildings();
+  const currentRoleOption = ROLE_OPTIONS.find(r => r.id === selectedRole);
+
+  // Check if already authenticated
   useEffect(() => {
-    const savedUser = sessionStorage.getItem('ihcm_user');
-    if (savedUser) {
-      onAuthenticated(savedUser);
-      return;
-    }
+    try {
+      const saved = sessionStorage.getItem('ihcm_session');
+      if (saved) {
+        const session = JSON.parse(saved);
+        if (session.userName && session.allowedRoles) {
+          onAuthenticated(session);
+          return;
+        }
+      }
+    } catch {}
     setChecking(false);
   }, []);
+
+  const toggleBuilding = (buildingId) => {
+    setSelectedBuildings(prev =>
+      prev.includes(buildingId)
+        ? prev.filter(b => b !== buildingId)
+        : [...prev, buildingId]
+    );
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
 
-    if (!name.trim()) {
-      setError('Please enter your name');
-      return;
-    }
-    if (!code.trim()) {
-      setError('Please enter the access code');
+    if (!name.trim()) { setError('Please enter your name'); return; }
+    if (!code.trim()) { setError('Please enter the access code'); return; }
+    if (!selectedRole) { setError('Please select your role'); return; }
+    if (currentRoleOption?.needsBuilding && selectedBuildings.length === 0) {
+      setError('Please select your building(s)');
       return;
     }
 
@@ -48,8 +113,14 @@ function AccessGate({ onAuthenticated }) {
       });
       const data = await res.json();
       if (data.valid) {
-        sessionStorage.setItem('ihcm_user', name.trim());
-        onAuthenticated(name.trim());
+        const access = getUserAccess(name.trim(), selectedRole, selectedBuildings);
+        const session = {
+          userName: name.trim(),
+          selectedRole,
+          ...access,
+        };
+        sessionStorage.setItem('ihcm_session', JSON.stringify(session));
+        onAuthenticated(session);
       } else {
         setError('Invalid access code');
       }
@@ -66,44 +137,98 @@ function AccessGate({ onAuthenticated }) {
     );
   }
 
+  const inputStyle = {
+    width: '100%', padding: '12px 16px', borderRadius: '8px',
+    border: '1px solid #d1d5db', fontSize: '15px', fontFamily: 'inherit',
+    boxSizing: 'border-box', marginBottom: '12px',
+  };
+
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       height: '100vh', fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#f9fafb'
     }}>
       <form onSubmit={handleSubmit} style={{
-        backgroundColor: 'white', padding: '40px', borderRadius: '12px',
-        boxShadow: '0 4px 24px rgba(0,0,0,0.1)', width: '360px', textAlign: 'center'
+        backgroundColor: 'white', padding: '36px', borderRadius: '12px',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.1)', width: '400px', textAlign: 'center'
       }}>
-        <h1 style={{ margin: '0 0 8px 0', fontSize: '22px', fontWeight: '600', color: '#1f2937' }}>
+        <h1 style={{ margin: '0 0 6px 0', fontSize: '22px', fontWeight: '600', color: '#1f2937' }}>
           IHCM AI Bot
         </h1>
-        <p style={{ margin: '0 0 24px 0', fontSize: '14px', color: '#6b7280' }}>
-          Sign in with your name and team access code
+        <p style={{ margin: '0 0 20px 0', fontSize: '14px', color: '#6b7280' }}>
+          Sign in to get started
         </p>
+
         <input
           type="text"
           value={name}
           onChange={e => setName(e.target.value)}
-          placeholder="Your name (e.g. Jane Smith)"
+          placeholder="Your name"
           autoFocus
-          style={{
-            width: '100%', padding: '12px 16px', borderRadius: '8px',
-            border: '1px solid #d1d5db', fontSize: '16px', fontFamily: 'inherit',
-            boxSizing: 'border-box', marginBottom: '12px'
-          }}
+          style={inputStyle}
         />
         <input
           type="password"
           value={code}
           onChange={e => setCode(e.target.value)}
           placeholder="Access code"
-          style={{
-            width: '100%', padding: '12px 16px', borderRadius: '8px',
-            border: '1px solid #d1d5db', fontSize: '16px', fontFamily: 'inherit',
-            boxSizing: 'border-box', marginBottom: '12px'
-          }}
+          style={inputStyle}
         />
+
+        {/* Role picker */}
+        <div style={{ textAlign: 'left', marginBottom: '12px' }}>
+          <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '8px' }}>
+            Your role
+          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {ROLE_OPTIONS.map(role => (
+              <label key={role.id} style={{
+                display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px',
+                borderRadius: '6px', cursor: 'pointer', fontSize: '14px',
+                border: selectedRole === role.id ? '2px solid #2563eb' : '1px solid #d1d5db',
+                backgroundColor: selectedRole === role.id ? '#eff6ff' : 'white',
+              }}>
+                <input
+                  type="radio"
+                  name="role"
+                  value={role.id}
+                  checked={selectedRole === role.id}
+                  onChange={() => { setSelectedRole(role.id); setSelectedBuildings([]); }}
+                  style={{ accentColor: '#2563eb' }}
+                />
+                {role.label}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Building picker — only for roles that need it */}
+        {currentRoleOption?.needsBuilding && (
+          <div style={{ textAlign: 'left', marginBottom: '12px' }}>
+            <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '8px' }}>
+              Your building(s)
+            </label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+              {activeBuildings.map(b => (
+                <label key={b.id} style={{
+                  display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px',
+                  borderRadius: '6px', cursor: 'pointer', fontSize: '13px',
+                  border: selectedBuildings.includes(b.id) ? '2px solid #2563eb' : '1px solid #d1d5db',
+                  backgroundColor: selectedBuildings.includes(b.id) ? '#eff6ff' : 'white',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedBuildings.includes(b.id)}
+                    onChange={() => toggleBuilding(b.id)}
+                    style={{ accentColor: '#2563eb' }}
+                  />
+                  {b.shortName || b.label}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
         {error && <p style={{ color: '#dc2626', fontSize: '13px', margin: '0 0 12px 0' }}>{error}</p>}
         <button type="submit" style={{
           width: '100%', padding: '12px', borderRadius: '8px', border: 'none',
@@ -118,14 +243,14 @@ function AccessGate({ onAuthenticated }) {
 }
 
 export default function App() {
-  // Access gate
-  const [authenticated, setAuthenticated] = useState(false);
-  const [userName, setUserName] = useState('');
+  // Access gate — session holds: { userName, selectedRole, allowedRoles, allowedBuildings }
+  const [userSession, setUserSession] = useState(null);
 
   // Feedback state: { [messageIndex]: 'useful' | 'not_useful' | 'wrong' }
   const [feedback, setFeedback] = useState({});
 
   // State management
+  // Default role/building set after login via useEffect below
   const [activeRoleId, setActiveRoleId] = useState('don');
   const [activeBuildingId, setActiveBuildingId] = useState('none');
   const [isDraft, setIsDraft] = useState(false);
@@ -538,10 +663,34 @@ export default function App() {
   const roleWorkflows = getWorkflowsForRole(activeRoleId);
   const activeWorkflow = activeWorkflowId ? WORKFLOWS[activeWorkflowId] : null;
 
+  // When session changes, set sensible defaults for role/building
+  useEffect(() => {
+    if (!userSession) return;
+    const { allowedRoles, allowedBuildings } = userSession;
+    // Set active role to first allowed role
+    if (allowedRoles && allowedRoles.length > 0 && !allowedRoles.includes(activeRoleId)) {
+      setActiveRoleId(allowedRoles[0]);
+    }
+    // Set active building: if restricted to specific buildings, pick the first one
+    if (allowedBuildings && allowedBuildings.length > 0) {
+      if (!allowedBuildings.includes(activeBuildingId)) {
+        setActiveBuildingId(allowedBuildings[0]);
+      }
+    } else {
+      // null = all buildings — default to "none" (All Buildings)
+      if (activeBuildingId === 'none') { /* already good */ }
+    }
+  }, [userSession]);
+
   // Access gate
-  if (!authenticated) {
-    return <AccessGate onAuthenticated={(name) => { setAuthenticated(true); setUserName(name); }} />;
+  if (!userSession) {
+    return <AccessGate onAuthenticated={(session) => setUserSession(session)} />;
   }
+
+  // Derived from session
+  const userName = userSession.userName;
+  const allowedRoles = userSession.allowedRoles || getRoleIds();
+  const allowedBuildings = userSession.allowedBuildings; // null = all
 
   return (
     <div
@@ -578,11 +727,11 @@ export default function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {userName && (
             <span style={{ fontSize: '13px', color: '#6b7280' }}>
-              {userName}
+              {userName}{userSession.selectedRole ? ` (${ROLE_OPTIONS.find(r => r.id === userSession.selectedRole)?.label || userSession.selectedRole})` : ''}
             </span>
           )}
           <button
-            onClick={() => { sessionStorage.removeItem('ihcm_user'); setAuthenticated(false); setUserName(''); }}
+            onClick={() => { sessionStorage.removeItem('ihcm_session'); setUserSession(null); }}
             style={{
               padding: '4px 10px', borderRadius: '4px', border: '1px solid #d1d5db',
               backgroundColor: 'transparent', cursor: 'pointer', fontSize: '12px',
@@ -606,7 +755,7 @@ export default function App() {
           overflowX: 'auto'
         }}
       >
-        {getRoleIds().map(roleId => {
+        {getRoleIds().filter(roleId => allowedRoles.includes(roleId)).map(roleId => {
           const role = getRoleById(roleId);
           const isActive = roleId === activeRoleId;
           return (
@@ -658,8 +807,12 @@ export default function App() {
             cursor: 'pointer'
           }}
         >
-          <option value="none">All Buildings</option>
-          {activeBuildings.map(building => (
+          {/* Show "All Buildings" only if user has access to all (allowedBuildings is null) */}
+          {!allowedBuildings && <option value="none">All Buildings</option>}
+          {(allowedBuildings
+            ? activeBuildings.filter(b => allowedBuildings.includes(b.id))
+            : activeBuildings
+          ).map(building => (
             <option key={building.id} value={building.id}>
               {building.label}
             </option>
