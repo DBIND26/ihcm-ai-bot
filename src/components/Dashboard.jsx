@@ -55,6 +55,12 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px', marginBottom: '24px' }}>
         <SummaryCard label="Total Census" value={totals.total_census} sub={`/ ${totals.total_beds} beds`} />
         <SummaryCard label="Occupancy" value={`${totals.occupancy_pct}%`} sub={`${totals.total_gap} empty beds`} />
+        {(() => {
+          const weighted = buildings.reduce((s, b) => s + (b.skilled_mix_pct || 0) * (b.census || 0), 0);
+          const totalCensus = buildings.reduce((s, b) => s + (b.census || 0), 0);
+          const portfolioMix = totalCensus > 0 ? Math.round((weighted / totalCensus) * 10) / 10 : 0;
+          return <SummaryCard label="Skilled Mix" value={`${portfolioMix}%`} sub="portfolio avg" color={portfolioMix >= 20 ? '#166534' : portfolioMix >= 10 ? '#d97706' : '#dc2626'} />;
+        })()}
         <SummaryCard label="Buildings" value={buildings.length} sub={`${totals.buildings_at_risk} at risk`} color={totals.buildings_at_risk > 0 ? '#dc2626' : '#166534'} />
         <SummaryCard label="Open Alerts" value={totals.total_alerts} sub={`${totals.buildings_watch} on watch`} color={totals.total_alerts > 3 ? '#dc2626' : '#6b7280'} />
       </div>
