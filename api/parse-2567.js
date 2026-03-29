@@ -79,8 +79,8 @@ function parseHeader(text) {
     provider_number: null,
   };
 
-  // Provider number
-  const providerMatch = text.match(/(?:PROVIDER|SUPPLIER|CMS)\s*(?:NUMBER|#|NO\.?)\s*[:\-]?\s*(\d{6})/i);
+  // Provider number (6-digit CMS ID)
+  const providerMatch = text.match(/(?:PROVIDER|SUPPLIER|CMS|CCN)\s*(?:NUMBER|#|NO\.?|ID)\s*[:\-]?\s*(\d{6})/i);
   if (providerMatch) info.provider_number = providerMatch[1];
 
   // Survey date
@@ -92,18 +92,66 @@ function parseHeader(text) {
     if (fallbackDate) info.survey_date = fallbackDate[1];
   }
 
-  // Facility name
-  const nameMatch = text.match(/(?:NAME\s+OF\s+PROVIDER|FACILITY\s+NAME)\s*[:\-]?\s*(.+?)(?:\n|$)/i);
-  if (nameMatch) info.facility_name = nameMatch[1].trim();
+  // Facility name — multiple strategies to avoid capturing address/form text
+  const namePatterns = [
+    // "NAME OF PROVIDER OR SUPPLIER\n<actual name>"
+    /NAME\s+OF\s+PROVIDER\s+OR\s+SUPPLIER\s*[\n\r]+\s*([A-Z][A-Z\s\-\.\'\&\/]+?)(?:\s*\n|\s{3,})/i,
+    // "NAME OF PROVIDER\n<actual name>"
+    /NAME\s+OF\s+PROVIDER\s*[:\-]?\s*[\n\r]+\s*([A-Z][A-Z\s\-\.\'\&\/]+?)(?:\s*\n|\s{3,})/i,
+    // "FACILITY NAME: <name>" on same line
+    /FACILITY\s+NAME\s*[:\-]\s*([A-Z][A-Z\s\-\.\'\&\/]+?)(?:\s*\n|\s{3,})/i,
+    // Provider name near the top (common in CMS forms)
+    /PROVIDER\s+NAME\s*[:\-]?\s*(.+?)(?:\n|$)/i,
+  ];
 
-  // Survey type
+  for (const pat of namePatterns) {
+    const match = text.slice(0, 3000).match(pat);
+    if (match) {
+      let name = match[1].trim();
+      // Clean up: remove trailing address-like text (starts with digits)
+      name = name.replace(/\s*\d{2,5}\s+[A-Z].+$/, '').trim();
+      // Remove "OR SUPPLIER" if captured
+      name = name.replace(/\bOR\s+SUPPLIER\b.*/i, '').trim();
+      // Remove "STREET ADDRESS" form labels
+      name = name.replace(/\bSTREET\s+ADDRESS\b.*/i, '').trim();
+      if (name.length > 3 && name.length < 100 && !/^\d/.test(name)) {
+        info.facility_name = name;
+        break;
+      }
+    }
+  }
+
+  // Fallback: try to find a known IHCM building name
+  if (!info.facility_name) {
+    const knownNames = ['NIGHTINGALE', 'ARKADELPHIA', 'STONEGATE', 'GLENWOOD', 'THE WOODS', 'CROSSETT', 'MARYMOUNT', 'VILLA AT'];
+    const topText = text.slice(0, 3000).toUpperCase();
+    for (const known of knownNames) {
+      const idx = topText.indexOf(known);
+      if (idx >= 0) {
+        // Grab the line containing this name
+        const lineStart = topText.lastIndexOf('\n', idx) + 1;
+        const lineEnd = topText.indexOf('\n', idx);
+        const line = text.slice(lineStart, lineEnd > 0 ? lineEnd : lineStart + 100).trim();
+        if (line.length > 3 && line.length < 100) {
+          info.facility_name = line;
+          break;
+        }
+      }
+    }
+  }
+
+  // Survey type detection
   const top3000 = text.slice(0, 3000).toUpperCase();
-  if (/COMPLAINT|INCIDENT/.test(top3000)) {
+  if (/COMPLAINT\s+(?:SURVEY|INVESTIGATION)|INCIDENT\s+INVESTIGATION/.test(top3000)) {
     info.survey_type = 'complaint';
-  } else if (/ANNUAL|RECERTIFICATION/.test(top3000)) {
+  } else if (/ANNUAL\s+(?:SURVEY|RECERTIFICATION)|RECERTIFICATION\s+SURVEY/.test(top3000)) {
     info.survey_type = 'annual';
-  } else if (/REVISIT|FOLLOW.?UP/.test(top3000)) {
+  } else if (/REVISIT|FOLLOW[\s\-]?UP/.test(top3000)) {
     info.survey_type = 'revisit';
+  } else if (/LIFE\s+SAFETY/.test(top3000)) {
+    info.survey_type = 'life_safety';
+  } else if (/INFECTION\s+CONTROL/.test(top3000)) {
+    info.survey_type = 'infection_control';
   } else {
     info.survey_type = 'standard';
   }
@@ -198,20 +246,31 @@ function extractPocDue(text) {
 
 function parseCitations(fullText) {
   const citations = [];
+  const seenTags = new Set();
+
+  // Valid F-tag range: F150-F999 (F000 is not a real deficiency tag)
+  const isValidFTag = (tagNum) => {
+    const num = parseInt(tagNum, 10);
+    return num >= 150 && num <= 999;
+  };
 
   // Find all F-tag markers
   const tagPattern = /(?:^|\n)\s*F\s*[\-\s]?(\d{3,4})\b/gm;
   const matches = [];
   let m;
   while ((m = tagPattern.exec(fullText)) !== null) {
-    matches.push({ tag: m[1], index: m.index });
+    if (isValidFTag(m[1])) {
+      matches.push({ tag: m[1], index: m.index });
+    }
   }
 
   // Alternate pattern: "Tag F689"
   if (matches.length === 0) {
     const altPattern = /Tag\s+F\s*(\d{3,4})/gi;
     while ((m = altPattern.exec(fullText)) !== null) {
-      matches.push({ tag: m[1], index: m.index });
+      if (isValidFTag(m[1])) {
+        matches.push({ tag: m[1], index: m.index });
+      }
     }
   }
 
@@ -220,6 +279,19 @@ function parseCitations(fullText) {
     const start = matches[i].index;
     const end = i + 1 < matches.length ? matches[i + 1].index : fullText.length;
     const sectionText = fullText.slice(start, end).trim();
+
+    // Skip very short sections (likely noise from form headers)
+    if (sectionText.length < 50) continue;
+
+    // Deduplicate: if we've seen this tag, only keep if this section has more content
+    if (seenTags.has(fTag)) {
+      const existing = citations.find(c => c.f_tag === fTag);
+      if (existing && sectionText.length <= (existing.findings?.length || 0)) continue;
+      // Replace with longer version
+      const idx = citations.findIndex(c => c.f_tag === fTag);
+      if (idx >= 0) citations.splice(idx, 1);
+    }
+    seenTags.add(fTag);
 
     citations.push({
       f_tag: fTag,
