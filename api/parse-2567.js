@@ -413,28 +413,64 @@ function parseCitations(fullText) {
     });
   }
 
-  // Post-processing: try to fill in null severity from full text patterns
-  // CMS 2567 forms often have severity in a grid/table that pdf-parse extracts oddly
-  if (citations.some(c => !c.scope_severity)) {
-    // Look for "F{tag} ... {letter}" patterns anywhere in the full text
-    for (const c of citations) {
-      if (c.scope_severity) continue;
-      const tagNum = c.f_tag.replace('F', '');
-      // Pattern: tag number followed eventually by a single letter D-L
-      const tagPattern = new RegExp(`F\\s*${tagNum}[^\\n]*?\\b([D-L])\\b`, 'i');
-      const match = fullText.match(tagPattern);
-      if (match) c.scope_severity = match[1].toUpperCase();
+  // ── Post-processing: global severity map extraction ──
+  // CMS 2567 forms have severity in a grid/table that pdf-parse extracts as
+  // interleaved text. Build a global map by scanning the FULL text for patterns
+  // where F-tag numbers appear near severity letters.
+
+  const severityMap = {};
+
+  // Strategy 1: Look for "F{tag} ... {letter}" on same line (wide search)
+  const globalTagSev = /F\s*(\d{3,4})[^\n]{0,80}\b([D-L])\b/gi;
+  let gm;
+  while ((gm = globalTagSev.exec(fullText)) !== null) {
+    const tag = `F${gm[1]}`;
+    if (!severityMap[tag]) severityMap[tag] = gm[2].toUpperCase();
+  }
+
+  // Strategy 2: CMS table grid — severity often on adjacent lines
+  // Pattern: line with F-tag, next 1-3 lines contain a standalone D-L letter
+  const allLines = fullText.split('\n');
+  for (let i = 0; i < allLines.length; i++) {
+    const tagMatch = allLines[i].match(/F\s*(\d{3,4})\b/);
+    if (!tagMatch || !isValidFTag(tagMatch[1])) continue;
+    const tag = `F${tagMatch[1]}`;
+    if (severityMap[tag]) continue;
+    // Check next 3 lines for a standalone severity letter
+    for (let j = i; j < Math.min(i + 4, allLines.length); j++) {
+      const sev = allLines[j].trim().match(/^([D-L])$/);
+      if (sev) { severityMap[tag] = sev[1]; break; }
+      // Also check for "D - Isolated" pattern
+      const sevDesc = allLines[j].match(/^\s*([D-L])\s*[\-–—]\s*(?:Isolated|Pattern|Widespread)/i);
+      if (sevDesc) { severityMap[tag] = sevDesc[1].toUpperCase(); break; }
     }
   }
 
-  // If STILL null, check for a default severity on complaint vs standard surveys
-  // Standard surveys with no explicit severity are typically at least "D" (isolated, no harm with potential)
-  const hasAnySeverity = citations.some(c => c.scope_severity);
-  if (!hasAnySeverity && citations.length > 0) {
-    // If the PDF has NO severity for any tag, it's likely a format issue — mark as "D" (minimum)
-    // but flag it for human review
-    for (const c of citations) {
-      if (!c.scope_severity) c.scope_severity = 'D*'; // asterisk indicates estimated
+  // Strategy 3: CMS grid header pattern — some PDFs extract as
+  // "F689 D F690 E F691 D" all on one line (compact table extraction)
+  const compactGrid = fullText.match(/(?:F\s*\d{3,4}\s+[A-L]\s*){2,}/gi);
+  if (compactGrid) {
+    for (const chunk of compactGrid) {
+      const pairs = chunk.matchAll(/F\s*(\d{3,4})\s+([A-L])/gi);
+      for (const p of pairs) {
+        const tag = `F${p[1]}`;
+        if (!severityMap[tag]) severityMap[tag] = p[2].toUpperCase();
+      }
+    }
+  }
+
+  // Apply the global map to citations that still have null severity
+  for (const c of citations) {
+    if (!c.scope_severity && severityMap[c.f_tag]) {
+      c.scope_severity = severityMap[c.f_tag];
+    }
+  }
+
+  // If STILL null after all strategies, mark as estimated
+  const stillNull = citations.filter(c => !c.scope_severity);
+  if (stillNull.length > 0) {
+    for (const c of stillNull) {
+      c.scope_severity = 'D*'; // asterisk indicates estimated, not extracted
     }
   }
 

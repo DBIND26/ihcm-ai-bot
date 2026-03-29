@@ -91,7 +91,14 @@ export default function ControlsRow({
             }}
           >
             {isUploadingSwot ? 'Uploading...' : swotResult
-              ? `SWOT saved (${swotResult.results?.length || 0} building${swotResult.results?.length !== 1 ? 's' : ''})`
+              ? (() => {
+                  const r = swotResult.results || [];
+                  const updated = r.filter(x => x.status === 'updated').length;
+                  const existing = r.filter(x => x.status === 'already_exists').length;
+                  if (existing === r.length) return 'SWOT unchanged';
+                  if (updated > 0) return `SWOT updated (${r.length} building${r.length !== 1 ? 's' : ''})`;
+                  return `SWOT saved (${r.length} building${r.length !== 1 ? 's' : ''})`;
+                })()
               : 'Upload SWOT'}
           </button>
         </>

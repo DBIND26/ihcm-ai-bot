@@ -295,53 +295,101 @@ export default async function handler(req, res) {
       const { createHash } = await import('node:crypto');
       const contentHash = createHash('md5').update(sectionContent).digest('hex');
 
+      // Check if this SWOT already exists (same content hash)
+      const { data: existing } = await supabase
+        .from('knowledge_sources')
+        .select('source_id, title, content_hash')
+        .eq('content_hash', contentHash)
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        // Content is identical — update the existing record
+        const { error: updateErr } = await supabase
+          .from('knowledge_sources')
+          .update({
+            citation_text: citationText,
+            full_content: sectionContent.slice(0, 100000),
+            effective_date: new Date().toISOString().split('T')[0],
+            tags: ['swot', 'marketing', 'strategy'],
+          })
+          .eq('source_id', existing.source_id);
+
+        results.push({
+          building: slug || 'portfolio',
+          title,
+          status: 'already_exists',
+          source_id: existing.source_id,
+          message: 'SWOT content unchanged — existing record updated.',
+        });
+        continue;
+      }
+
+      // Check for same title+building (content changed — new version)
+      const titleFilter = supabase
+        .from('knowledge_sources')
+        .select('source_id, current_version')
+        .eq('title', title)
+        .eq('source_type', 'corporate_playbook');
+
+      if (facilityId) titleFilter.eq('facility_id', facilityId);
+      else titleFilter.is('facility_id', null);
+
+      const { data: existingTitle } = await titleFilter.limit(1).maybeSingle();
+
+      if (existingTitle) {
+        // Same building SWOT but content changed — update in place
+        const { data: updated, error: updateErr } = await supabase
+          .from('knowledge_sources')
+          .update({
+            citation_text: citationText,
+            full_content: sectionContent.slice(0, 100000),
+            content_hash: contentHash,
+            effective_date: new Date().toISOString().split('T')[0],
+            tags: ['swot', 'marketing', 'strategy'],
+            current_version: (existingTitle.current_version || 1) + 1,
+          })
+          .eq('source_id', existingTitle.source_id)
+          .select('source_id, title, status')
+          .single();
+
+        if (updateErr) {
+          results.push({ building: slug || 'portfolio', status: 'error', error: updateErr.message });
+          continue;
+        }
+        results.push({
+          building: slug || 'portfolio',
+          title,
+          status: 'updated',
+          source_id: updated?.source_id,
+          message: `SWOT updated to version ${(existingTitle.current_version || 1) + 1}.`,
+        });
+        continue;
+      }
+
+      // New SWOT — insert
       const { data, error } = await supabase
         .from('knowledge_sources')
-        .upsert({
+        .insert({
           title,
           source_type: 'corporate_playbook',
           state_code: stateCode,
           facility_id: facilityId,
           tags: ['swot', 'marketing', 'strategy'],
-          status: 'approved', // SWOTs are owner-provided, auto-approve
+          status: 'approved',
           effective_date: new Date().toISOString().split('T')[0],
           citation_text: citationText,
           full_content: sectionContent.slice(0, 100000),
           content_hash: contentHash,
-        }, {
-          onConflict: 'title,source_type,COALESCE(state_code,\'\'),COALESCE(facility_id,\'00000000-0000-0000-0000-000000000000\')',
-          ignoreDuplicates: false,
         })
         .select('source_id, title, status')
         .single();
 
       if (error) {
-        // Try insert without upsert if conflict resolution fails
-        const { data: inserted, error: insertErr } = await supabase
-          .from('knowledge_sources')
-          .insert({
-            title,
-            source_type: 'corporate_playbook',
-            state_code: stateCode,
-            facility_id: facilityId,
-            tags: ['swot', 'marketing', 'strategy'],
-            status: 'approved',
-            effective_date: new Date().toISOString().split('T')[0],
-            citation_text: citationText,
-            full_content: sectionContent.slice(0, 100000),
-            content_hash: contentHash,
-          })
-          .select('source_id, title, status')
-          .single();
-
-        if (insertErr) {
-          results.push({ building: slug || 'portfolio', status: 'error', error: insertErr.message });
-          continue;
-        }
-        results.push({ building: slug || 'portfolio', title, status: 'saved', source_id: inserted?.source_id });
-      } else {
-        results.push({ building: slug || 'portfolio', title, status: 'saved', source_id: data?.source_id });
+        results.push({ building: slug || 'portfolio', status: 'error', error: error.message });
+        continue;
       }
+      results.push({ building: slug || 'portfolio', title, status: 'saved', source_id: data?.source_id });
     }
 
     console.log(JSON.stringify({
