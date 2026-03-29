@@ -241,6 +241,10 @@ export default function App() {
 
     // Hospitalization review workflows route to dedicated API
     if (activeWorkflowId.startsWith('hospitalization_review_')) {
+      if (!activeBuildingId || activeBuildingId === 'none') {
+        setError('Please select a building before submitting a hospitalization review.');
+        return;
+      }
       setIsLoading(true);
       setError(null);
       setHospResult(null);

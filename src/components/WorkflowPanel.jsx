@@ -39,58 +39,23 @@ export default function WorkflowPanel({
             {activeWorkflow.description}
           </p>
 
-          {activeWorkflow.requiredInputs && activeWorkflow.requiredInputs.length > 0 && (
+          {/* Required Inputs */}
+          {activeWorkflow.requiredInputs?.length > 0 && (
             <div className="ihcm-workflow-inputs">
               {activeWorkflow.requiredInputs.map(input => (
-                <div key={input.name} className="ihcm-workflow-input-group" style={{ marginBottom: '12px' }}>
-                  <label className="ihcm-workflow-input-label" style={{
-                    display: 'block', fontSize: '13px', fontWeight: '500',
-                    marginBottom: '6px', color: '#374151'
-                  }}>
-                    {input.label}
-                  </label>
-                  {input.type === 'textarea' ? (
-                    <textarea
-                      value={workflowInputs[input.name] || ''}
-                      onChange={e => onWorkflowInputChange(input.name, e.target.value)}
-                      placeholder={input.placeholder || ''}
-                      className="ihcm-workflow-textarea"
-                      style={{
-                        width: '100%', padding: '8px 12px', borderRadius: '6px',
-                        border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit',
-                        resize: 'vertical', minHeight: '80px'
-                      }}
-                    />
-                  ) : input.type === 'select' && input.options ? (
-                    <select
-                      value={workflowInputs[input.name] || ''}
-                      onChange={e => onWorkflowInputChange(input.name, e.target.value)}
-                      style={{
-                        width: '100%', padding: '8px 12px', borderRadius: '6px',
-                        border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit',
-                        boxSizing: 'border-box', backgroundColor: 'white',
-                      }}
-                    >
-                      <option value="">{input.placeholder || 'Select...'}</option>
-                      {input.options.map(opt => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type={input.type || 'text'}
-                      value={workflowInputs[input.name] || ''}
-                      onChange={e => onWorkflowInputChange(input.name, e.target.value)}
-                      placeholder={input.placeholder || ''}
-                      className="ihcm-workflow-input"
-                      style={{
-                        width: '100%', padding: '8px 12px', borderRadius: '6px',
-                        border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit',
-                        boxSizing: 'border-box'
-                      }}
-                    />
-                  )}
-                </div>
+                <WorkflowField key={input.name} input={input} value={workflowInputs[input.name] || ''} onChange={onWorkflowInputChange} />
+              ))}
+            </div>
+          )}
+
+          {/* Optional Inputs */}
+          {activeWorkflow.optionalInputs?.length > 0 && (
+            <div className="ihcm-workflow-inputs" style={{ marginTop: '8px' }}>
+              <div style={{ fontSize: '11px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px', fontWeight: '600' }}>
+                Optional
+              </div>
+              {activeWorkflow.optionalInputs.map(input => (
+                <WorkflowField key={input.name} input={input} value={workflowInputs[input.name] || ''} onChange={onWorkflowInputChange} />
               ))}
             </div>
           )}
@@ -110,6 +75,58 @@ export default function WorkflowPanel({
             {isLoading ? 'Starting...' : 'Start Workflow'}
           </button>
         </div>
+      )}
+    </div>
+  );
+}
+
+function WorkflowField({ input, value, onChange }) {
+  return (
+    <div className="ihcm-workflow-input-group" style={{ marginBottom: '10px' }}>
+      <label className="ihcm-workflow-input-label" style={{
+        display: 'block', fontSize: '13px', fontWeight: '500',
+        marginBottom: '4px', color: '#374151'
+      }}>
+        {input.label}
+      </label>
+      {input.type === 'textarea' ? (
+        <textarea
+          value={value}
+          onChange={e => onChange(input.name, e.target.value)}
+          placeholder={input.placeholder || ''}
+          style={{
+            width: '100%', padding: '8px 12px', borderRadius: '6px',
+            border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit',
+            resize: 'vertical', minHeight: '80px', boxSizing: 'border-box',
+          }}
+        />
+      ) : input.type === 'select' && input.options ? (
+        <select
+          value={value}
+          onChange={e => onChange(input.name, e.target.value)}
+          style={{
+            width: '100%', padding: '8px 12px', borderRadius: '6px',
+            border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit',
+            boxSizing: 'border-box', backgroundColor: 'white',
+          }}
+        >
+          <option value="">{input.placeholder || 'Select...'}</option>
+          {input.options.map(opt => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+      ) : (
+        <input
+          type={input.type || 'text'}
+          value={value}
+          onChange={e => onChange(input.name, e.target.value)}
+          placeholder={input.placeholder || ''}
+          style={{
+            width: '100%', padding: '8px 12px', borderRadius: '6px',
+            border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit',
+            boxSizing: 'border-box',
+          }}
+        />
       )}
     </div>
   );

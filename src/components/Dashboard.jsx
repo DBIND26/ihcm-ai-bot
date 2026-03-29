@@ -75,16 +75,16 @@ export default function Dashboard({ authHeaders, onSelectBuilding }) {
         })()}
         <SummaryCard label="Buildings" value={buildings.length} sub={`${totals.buildings_at_risk} at risk`} color={totals.buildings_at_risk > 0 ? '#dc2626' : '#166534'} />
         <SummaryCard label="Open Alerts" value={totals.total_alerts} sub={`${totals.buildings_watch} on watch`} color={totals.total_alerts > 3 ? '#dc2626' : '#6b7280'} />
-        {SHOW_HOSPITALIZATIONS && hospStats && (
+        {SHOW_HOSPITALIZATIONS && hospStats && hospStats.total > 0 && (
           <SummaryCard
             label="Hospitalizations"
             value={hospStats.total}
-            sub={hospStats.final_avoidable_pct != null
-              ? `${hospStats.final_avoidable_pct}% confirmed avoidable`
-              : hospStats.ai_avoidable_pct != null
-                ? `${hospStats.ai_avoidable_pct}% AI-flagged (${hospStats.pending} pending review)`
-                : `${hospStats.pending} pending`}
-            color={(hospStats.final_avoidable_pct || hospStats.ai_avoidable_pct || 0) > 30 ? '#dc2626' : (hospStats.final_avoidable_pct || hospStats.ai_avoidable_pct || 0) > 15 ? '#d97706' : '#166534'}
+            sub={[
+              hospStats.ai_avoidable_pct != null ? `AI: ${hospStats.ai_avoidable_pct}% avoidable` : null,
+              hospStats.final_avoidable_pct != null ? `Confirmed: ${hospStats.final_avoidable_pct}%` : null,
+              hospStats.pending > 0 ? `${hospStats.pending} pending` : null,
+            ].filter(Boolean).join(' · ')}
+            color={(hospStats.final_avoidable_pct ?? hospStats.ai_avoidable_pct ?? 0) > 30 ? '#dc2626' : (hospStats.final_avoidable_pct ?? hospStats.ai_avoidable_pct ?? 0) > 15 ? '#d97706' : '#166534'}
           />
         )}
       </div>
