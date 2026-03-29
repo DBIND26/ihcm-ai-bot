@@ -11,6 +11,7 @@ const MAX_PDF_SIZE = 20 * 1024 * 1024; // 20 MB
 
 // ── Common F-tag descriptions ──
 const COMMON_TAGS = {
+  F584: "Safe/Clean/Comfortable/Homelike Environment",
   F550: "Resident Rights/Exercise of Rights",
   F600: "Free from Abuse and Neglect",
   F609: "Reporting of Alleged Violations",
@@ -419,6 +420,22 @@ function parseCitations(fullText) {
   // where F-tag numbers appear near severity letters.
 
   const severityMap = {};
+
+  // Strategy 0 (highest priority): SS=<letter> immediately before F-tag
+  // Real CMS PDFs often extract as "SS=D\nF584" or "SS=E\nF656"
+  const ssBeforeTag = /SS\s*=\s*([A-L])\s*\n\s*F\s*(\d{3,4})/g;
+  let ssm;
+  while ((ssm = ssBeforeTag.exec(fullText)) !== null) {
+    const tag = `F${ssm[2]}`;
+    severityMap[tag] = ssm[1].toUpperCase();
+  }
+
+  // Also check: SS=<letter> on same line as F-tag
+  const ssInline = /SS\s*=\s*([A-L])\s+F\s*(\d{3,4})/gi;
+  while ((ssm = ssInline.exec(fullText)) !== null) {
+    const tag = `F${ssm[2]}`;
+    if (!severityMap[tag]) severityMap[tag] = ssm[1].toUpperCase();
+  }
 
   // Strategy 1: Look for "F{tag} ... {letter}" on same line (wide search)
   const globalTagSev = /F\s*(\d{3,4})[^\n]{0,80}\b([D-L])\b/gi;
