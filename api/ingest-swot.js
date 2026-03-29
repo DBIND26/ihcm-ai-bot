@@ -28,31 +28,40 @@ const BUILDING_KEYWORDS = {
 };
 
 function detectBuildings(text) {
-  // Only detect buildings that appear as section headers or prominent labels.
-  // A building name in body text (e.g., "coordinate with Stonegate") should NOT
-  // create a separate entry for that building.
+  // Detect buildings from section headers and prominent labels.
+  // Body text mentions (e.g., "coordinate with Stonegate") should NOT create entries.
   const found = new Set();
   const lines = text.split('\n');
 
   for (const line of lines) {
     const trimmed = line.trim();
-    // Match lines that look like section headers:
-    // - All caps line with a building name
-    // - "Building: Name" or "## Name" patterns
-    // - Lines that are mostly the building name (short lines)
-    const isHeader = (
-      trimmed.length < 80 &&
-      (trimmed === trimmed.toUpperCase() || /^#+\s/.test(trimmed) || /^(?:building|facility|location)\s*[:\-]/i.test(trimmed))
-    );
-    if (!isHeader && trimmed.length > 80) continue; // skip body text lines
+    if (!trimmed) continue;
 
     const lower = trimmed.toLowerCase();
+
+    // Check if line looks like a header/label (not body text):
+    // - Short lines (under 100 chars)
+    // - All caps
+    // - Markdown headings
+    // - "Building:" or "Facility:" prefix
+    // - Line is mostly the building name (>30% of line length)
+    const isShort = trimmed.length < 100;
+    const isAllCaps = trimmed === trimmed.toUpperCase() && trimmed.length > 3;
+    const isMarkdownHeading = /^#+\s/.test(trimmed);
+    const isLabeledHeader = /^(?:building|facility|location|swot|analysis)\s*[:\-]/i.test(trimmed);
+
+    if (!isShort) continue; // skip long body text lines
+
     for (const [keyword, slug] of Object.entries(BUILDING_KEYWORDS)) {
-      if (lower.includes(keyword) && !found.has(slug)) {
-        // Additional check: the keyword should be a substantial part of the line
-        if (keyword.length > trimmed.length * 0.2 || isHeader) {
-          found.add(slug);
-        }
+      if (!lower.includes(keyword) || found.has(slug)) continue;
+
+      // The building name should be prominent in this line
+      const nameRatio = keyword.length / trimmed.length;
+      const isProminent = nameRatio > 0.25 || isAllCaps || isMarkdownHeading || isLabeledHeader;
+
+      // For short lines where the building name is the main content
+      if (isProminent || trimmed.length < 50) {
+        found.add(slug);
       }
     }
   }

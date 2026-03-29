@@ -79,9 +79,23 @@ function parseHeader(text) {
     provider_number: null,
   };
 
-  // Provider number (6-digit CMS ID)
-  const providerMatch = text.match(/(?:PROVIDER|SUPPLIER|CMS|CCN)\s*(?:NUMBER|#|NO\.?|ID)\s*[:\-]?\s*(\d{6})/i);
-  if (providerMatch) info.provider_number = providerMatch[1];
+  // Provider number (6-digit CMS ID) — try multiple patterns
+  const providerPatterns = [
+    /(?:PROVIDER|SUPPLIER|CMS|CCN)\s*(?:NUMBER|#|NO\.?|ID)\s*[:\-]?\s*(\d{6})/i,
+    /(?:CERTIFICATION|PROVIDER)\s*(?:#|NUMBER|NO)\s*[:\-]?\s*(\d{6})/i,
+    /\b(0[1-5]\d{4}|[1-9]\d{5})\b/,  // 6-digit number starting with state prefix
+  ];
+  for (const pat of providerPatterns) {
+    const match = text.slice(0, 3000).match(pat);
+    if (match) {
+      const num = match[1];
+      // Validate: must be a plausible CMS provider number (starts with a state prefix)
+      if (/^(0[1-5]|[1-4]\d|5[0-6])\d{4}$/.test(num)) {
+        info.provider_number = num;
+        break;
+      }
+    }
+  }
 
   // Survey date
   const dateMatch = text.match(/(?:SURVEY|COMPLETED|EVENT)\s*(?:DATE|COMPLETED)\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
@@ -380,6 +394,31 @@ function parseCitations(fullText) {
       findings: extractFindings(sectionText),
       plan_of_correction_due: extractPocDue(sectionText),
     });
+  }
+
+  // Post-processing: try to fill in null severity from full text patterns
+  // CMS 2567 forms often have severity in a grid/table that pdf-parse extracts oddly
+  if (citations.some(c => !c.scope_severity)) {
+    // Look for "F{tag} ... {letter}" patterns anywhere in the full text
+    for (const c of citations) {
+      if (c.scope_severity) continue;
+      const tagNum = c.f_tag.replace('F', '');
+      // Pattern: tag number followed eventually by a single letter D-L
+      const tagPattern = new RegExp(`F\\s*${tagNum}[^\\n]*?\\b([D-L])\\b`, 'i');
+      const match = fullText.match(tagPattern);
+      if (match) c.scope_severity = match[1].toUpperCase();
+    }
+  }
+
+  // If STILL null, check for a default severity on complaint vs standard surveys
+  // Standard surveys with no explicit severity are typically at least "D" (isolated, no harm with potential)
+  const hasAnySeverity = citations.some(c => c.scope_severity);
+  if (!hasAnySeverity && citations.length > 0) {
+    // If the PDF has NO severity for any tag, it's likely a format issue — mark as "D" (minimum)
+    // but flag it for human review
+    for (const c of citations) {
+      if (!c.scope_severity) c.scope_severity = 'D*'; // asterisk indicates estimated
+    }
   }
 
   return citations;
