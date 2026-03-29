@@ -34,8 +34,10 @@ const ALLOWED_ORIGINS = [
 ];
 
 const MAX_BODY_SIZE = 256 * 1024;   // 256 KB (need room for document context)
-const MAX_MESSAGE_LENGTH = 8000;
-const MAX_MESSAGES = 20;
+const MAX_MESSAGE_LENGTH = 4000;    // per-message char limit (down from 8000)
+const MAX_MESSAGES = 10;            // context window size (down from 20)
+const MAX_DOCUMENT_CONTEXT = 30000; // document context char limit (down from 60000)
+const MAX_HISTORY_CONTEXT = 5000;   // building history char limit (down from 10000)
 const CHAT_MAX_TOKENS = 2000;
 const DRAFT_MAX_TOKENS = 4096;
 const MODEL = 'claude-sonnet-4-20250514';
@@ -373,13 +375,32 @@ function daysSince(dateString) {
 }
 
 function sanitizeMessages(messages) {
-  return messages
+  const filtered = messages
     .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
     .map(m => ({
       role: m.role,
       content: m.content.slice(0, MAX_MESSAGE_LENGTH),
-    }))
-    .slice(-MAX_MESSAGES);
+    }));
+
+  // If conversation exceeds window, prepend a summary of older messages
+  if (filtered.length > MAX_MESSAGES) {
+    const older = filtered.slice(0, filtered.length - MAX_MESSAGES);
+    const summary = older
+      .filter(m => m.role === 'user')
+      .map(m => m.content.slice(0, 100))
+      .join('; ');
+    const window = filtered.slice(-MAX_MESSAGES);
+    // Inject summary as a system-style context hint in the first user message
+    if (summary && window.length > 0) {
+      window.unshift({
+        role: 'user',
+        content: `[Earlier in this conversation, I asked about: ${summary.slice(0, 500)}]`,
+      });
+    }
+    return window;
+  }
+
+  return filtered;
 }
 
 
@@ -499,8 +520,8 @@ export default async function handler(req, res) {
       isDraft: isDraft || false,
       workflowId: workflowId || null,
       buildingContext,
-      documentContext: typeof documentContext === 'string' ? documentContext.slice(0, 60000) : null,
-      historyContext: typeof historyContext === 'string' ? historyContext.slice(0, 10000) : null,
+      documentContext: typeof documentContext === 'string' ? documentContext.slice(0, MAX_DOCUMENT_CONTEXT) : null,
+      historyContext: typeof historyContext === 'string' ? historyContext.slice(0, MAX_HISTORY_CONTEXT) : null,
     });
 
     // ── Call Anthropic ──

@@ -1,248 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ROLES, getRoleById, getRoleIds } from '../v2_definitive/src/bots.js';
-import { BUILDINGS, getActiveBuildings } from '../v2_definitive/src/buildings.js';
+import { getRoleById, getRoleIds } from '../v2_definitive/src/bots.js';
+import { getActiveBuildings } from '../v2_definitive/src/buildings.js';
 import { WORKFLOWS, getWorkflowsForRole } from '../v2_definitive/src/workflows.js';
-import { loadMessages, saveMessages, clearMessages, listConversations } from './storage.js';
-import {
-  addSurvey, getSurveys, getLatestSurvey,
-  addEvent, getEvents,
-  getBuildingHistoryContext, getBuildingHistory,
-  EVENT_CATEGORIES,
-} from './buildingHistory.js';
+import { loadMessages, saveMessages, clearMessages } from './storage.js';
+import { addSurvey, addEvent, getBuildingHistoryContext, getBuildingHistory } from './buildingHistory.js';
+import AccessGate, { ROLE_OPTIONS } from './components/AccessGate.jsx';
+import MessageList from './components/MessageList.jsx';
+import BuildingHistoryPanel from './components/BuildingHistoryPanel.jsx';
+import ConversationHistoryPanel from './components/ConversationHistoryPanel.jsx';
 
-// ── Role/Building access rules ──
-// DON, MDS, Admin = their role only, their building(s) only
-// Billing = billing only, all buildings
-// Regional = all roles EXCEPT billing, all buildings
-// Dov = everything
-
-const ROLE_OPTIONS = [
-  { id: 'don', label: 'Director of Nursing (DON)', needsBuilding: true },
-  { id: 'mds', label: 'MDS Coordinator', needsBuilding: true },
-  { id: 'billing', label: 'Billing & RCM', needsBuilding: false },
-  { id: 'admin', label: 'Facility Administrator', needsBuilding: true },
-  { id: 'regional', label: 'Regional Operations', needsBuilding: false },
-];
-
-function getUserAccess(userName, selectedRole, selectedBuildings) {
-  const nameLower = (userName || '').toLowerCase().trim();
-
-  // Dov gets everything
-  if (nameLower === 'dov' || nameLower === 'dov braun' || nameLower.includes('dbraun')) {
-    return {
-      allowedRoles: ['mds', 'don', 'billing', 'admin', 'regional'],
-      allowedBuildings: null, // null = all buildings
-    };
-  }
-
-  // Regional: all roles except billing, all buildings
-  if (selectedRole === 'regional') {
-    return {
-      allowedRoles: ['mds', 'don', 'admin', 'regional'],
-      allowedBuildings: null,
-    };
-  }
-
-  // Billing: billing only, all buildings
-  if (selectedRole === 'billing') {
-    return {
-      allowedRoles: ['billing'],
-      allowedBuildings: null,
-    };
-  }
-
-  // DON, MDS, Admin: their role only, their building(s) only
-  return {
-    allowedRoles: [selectedRole],
-    allowedBuildings: selectedBuildings.length > 0 ? selectedBuildings : null,
-  };
-}
-
-// ── Access Gate Component ──
-function AccessGate({ onAuthenticated }) {
-  const [name, setName] = useState('');
-  const [code, setCode] = useState('');
-  const [selectedRole, setSelectedRole] = useState('');
-  const [selectedBuildings, setSelectedBuildings] = useState([]);
-  const [error, setError] = useState(null);
-  const [checking, setChecking] = useState(true);
-
-  const activeBuildings = getActiveBuildings();
-  const currentRoleOption = ROLE_OPTIONS.find(r => r.id === selectedRole);
-
-  // Check if already authenticated
-  useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem('ihcm_session');
-      if (saved) {
-        const session = JSON.parse(saved);
-        if (session.userName && session.allowedRoles) {
-          onAuthenticated(session);
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn('[IHCM] Session recovery failed:', err);
-    }
-    setChecking(false);
-  }, []);
-
-  const toggleBuilding = (buildingId) => {
-    setSelectedBuildings(prev =>
-      prev.includes(buildingId)
-        ? prev.filter(b => b !== buildingId)
-        : [...prev, buildingId]
-    );
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-
-    if (!name.trim()) { setError('Please enter your name'); return; }
-    if (!code.trim()) { setError('Please enter the access code'); return; }
-    if (!selectedRole) { setError('Please select your role'); return; }
-    if (currentRoleOption?.needsBuilding && selectedBuildings.length === 0) {
-      setError('Please select your building(s)');
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/verify-access', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: code.trim(), name: name.trim() }),
-      });
-      const data = await res.json();
-      if (data.valid) {
-        const access = getUserAccess(name.trim(), selectedRole, selectedBuildings);
-        const session = {
-          userName: name.trim(),
-          selectedRole,
-          ...access,
-        };
-        sessionStorage.setItem('ihcm_session', JSON.stringify(session));
-        onAuthenticated(session);
-      } else {
-        setError('Invalid access code');
-      }
-    } catch {
-      setError('Connection error — try again');
-    }
-  };
-
-  if (checking) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Inter, system-ui, sans-serif' }}>
-        <p style={{ color: '#6b7280' }}>Loading...</p>
-      </div>
-    );
-  }
-
-  const inputStyle = {
-    width: '100%', padding: '12px 16px', borderRadius: '8px',
-    border: '1px solid #d1d5db', fontSize: '15px', fontFamily: 'inherit',
-    boxSizing: 'border-box', marginBottom: '12px',
-  };
-
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      height: '100vh', fontFamily: 'Inter, system-ui, sans-serif', backgroundColor: '#f9fafb'
-    }}>
-      <form onSubmit={handleSubmit} style={{
-        backgroundColor: 'white', padding: '36px', borderRadius: '12px',
-        boxShadow: '0 4px 24px rgba(0,0,0,0.1)', width: '400px', textAlign: 'center'
-      }}>
-        <h1 style={{ margin: '0 0 6px 0', fontSize: '22px', fontWeight: '600', color: '#1f2937' }}>
-          IHCM AI Bot
-        </h1>
-        <p style={{ margin: '0 0 20px 0', fontSize: '14px', color: '#6b7280' }}>
-          Sign in to get started
-        </p>
-
-        <input
-          type="text"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          placeholder="Your name"
-          autoFocus
-          style={inputStyle}
-        />
-        <input
-          type="password"
-          value={code}
-          onChange={e => setCode(e.target.value)}
-          placeholder="Access code"
-          style={inputStyle}
-        />
-
-        {/* Role picker */}
-        <div style={{ textAlign: 'left', marginBottom: '12px' }}>
-          <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '8px' }}>
-            Your role
-          </label>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {ROLE_OPTIONS.map(role => (
-              <label key={role.id} style={{
-                display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px',
-                borderRadius: '6px', cursor: 'pointer', fontSize: '14px',
-                border: selectedRole === role.id ? '2px solid #2563eb' : '1px solid #d1d5db',
-                backgroundColor: selectedRole === role.id ? '#eff6ff' : 'white',
-              }}>
-                <input
-                  type="radio"
-                  name="role"
-                  value={role.id}
-                  checked={selectedRole === role.id}
-                  onChange={() => { setSelectedRole(role.id); setSelectedBuildings([]); }}
-                  style={{ accentColor: '#2563eb' }}
-                />
-                {role.label}
-              </label>
-            ))}
-          </div>
-        </div>
-
-        {/* Building picker — only for roles that need it */}
-        {currentRoleOption?.needsBuilding && (
-          <div style={{ textAlign: 'left', marginBottom: '12px' }}>
-            <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '8px' }}>
-              Your building(s)
-            </label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-              {activeBuildings.map(b => (
-                <label key={b.id} style={{
-                  display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 10px',
-                  borderRadius: '6px', cursor: 'pointer', fontSize: '13px',
-                  border: selectedBuildings.includes(b.id) ? '2px solid #2563eb' : '1px solid #d1d5db',
-                  backgroundColor: selectedBuildings.includes(b.id) ? '#eff6ff' : 'white',
-                }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedBuildings.includes(b.id)}
-                    onChange={() => toggleBuilding(b.id)}
-                    style={{ accentColor: '#2563eb' }}
-                  />
-                  {b.shortName || b.label}
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {error && <p style={{ color: '#dc2626', fontSize: '13px', margin: '0 0 12px 0' }}>{error}</p>}
-        <button type="submit" style={{
-          width: '100%', padding: '12px', borderRadius: '8px', border: 'none',
-          backgroundColor: '#2563eb', color: 'white', fontSize: '15px',
-          fontWeight: '600', cursor: 'pointer'
-        }}>
-          Enter
-        </button>
-      </form>
-    </div>
-  );
-}
+// ROLE_OPTIONS and getUserAccess are now in components/AccessGate.jsx
 
 export default function App() {
   // Access gate — session holds: { userName, selectedRole, allowedRoles, allowedBuildings }
@@ -250,8 +17,6 @@ export default function App() {
 
   // Feedback state: { [messageIndex]: 'useful' | 'not_useful' | 'wrong' }
   const [feedback, setFeedback] = useState({});
-  // Copy-to-clipboard state: tracks which message index was just copied
-  const [copiedMsg, setCopiedMsg] = useState(null);
   // Server-side conversation ID (from Supabase, returned by /api/chat)
   const [conversationId, setConversationId] = useState(null);
   // Conversation list from server (for history sidebar)
@@ -286,8 +51,7 @@ export default function App() {
   // Building history state
   const [showHistory, setShowHistory] = useState(false);
   const [historyData, setHistoryData] = useState({ surveys: [], events: [] });
-  const [showAddEvent, setShowAddEvent] = useState(false);
-  const [newEvent, setNewEvent] = useState({ category: 'general', title: '', description: '', date: '' });
+  // showAddEvent/newEvent state moved to BuildingHistoryPanel
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
@@ -515,19 +279,7 @@ export default function App() {
     }
   };
 
-  // Handle adding a building event
-  const handleAddEvent = () => {
-    if (!activeBuildingId || activeBuildingId === 'none') return;
-    if (!newEvent.title.trim()) return;
-
-    addEvent(activeBuildingId, {
-      ...newEvent,
-      date: newEvent.date || new Date().toISOString().split('T')[0],
-    });
-    setHistoryData(getBuildingHistory(activeBuildingId));
-    setNewEvent({ category: 'general', title: '', description: '', date: '' });
-    setShowAddEvent(false);
-  };
+  // handleAddEvent moved to BuildingHistoryPanel component
 
   // Build document context string for the API — combines given docs array
   const buildDocumentContext = (docs) => {
@@ -737,167 +489,8 @@ export default function App() {
     });
   };
 
-  // Copy message content to clipboard
-  const handleCopy = async (msgIndex, content) => {
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopiedMsg(msgIndex);
-      setTimeout(() => setCopiedMsg(null), 2000);
-    } catch (err) {
-      console.warn('[IHCM] Copy to clipboard failed:', err);
-    }
-  };
+  // formatInline, formatContent, handleCopy moved to components/
 
-  // Format inline markdown (bold, links)
-  const formatInline = (text, lineKey) => {
-    // Process bold and links in one pass
-    const parts = [];
-    let remaining = text;
-    let partIdx = 0;
-
-    while (remaining.length > 0) {
-      // Find the next bold or link
-      const boldMatch = remaining.match(/\*\*([^*]+)\*\*/);
-      const linkMatch = remaining.match(/\[([^\]]+)\]\(([^)]+)\)/);
-
-      let nextMatch = null;
-      let nextType = null;
-
-      if (boldMatch && (!linkMatch || boldMatch.index <= linkMatch.index)) {
-        nextMatch = boldMatch;
-        nextType = 'bold';
-      } else if (linkMatch) {
-        nextMatch = linkMatch;
-        nextType = 'link';
-      }
-
-      if (!nextMatch) {
-        parts.push(remaining);
-        break;
-      }
-
-      // Text before the match
-      if (nextMatch.index > 0) {
-        parts.push(remaining.slice(0, nextMatch.index));
-      }
-
-      if (nextType === 'bold') {
-        parts.push(<strong key={`${lineKey}-b${partIdx++}`}>{nextMatch[1]}</strong>);
-      } else if (nextType === 'link') {
-        const href = nextMatch[2];
-        // Only allow safe protocols — reject javascript:, data:, vbscript:, etc.
-        const isSafe = /^https?:\/\//i.test(href) || href.startsWith('/') || href.startsWith('#');
-        if (isSafe) {
-          parts.push(
-            <a key={`${lineKey}-a${partIdx++}`} href={href} target="_blank" rel="noopener noreferrer"
-              style={{ color: '#2563eb', textDecoration: 'underline' }}>
-              {nextMatch[1]}
-            </a>
-          );
-        } else {
-          // Render as plain text if URL is unsafe
-          parts.push(nextMatch[1]);
-        }
-      }
-
-      remaining = remaining.slice(nextMatch.index + nextMatch[0].length);
-    }
-
-    return parts.length === 1 && typeof parts[0] === 'string' ? parts[0] : parts;
-  };
-
-  // Classify a line as 'ul', 'ol', or null (not a list item)
-  const getListType = (line) => {
-    if (/^\s*\d+[\.\)]\s/.test(line)) return 'ol';
-    if (line.trim().startsWith('-') || line.trim().startsWith('* ')) return 'ul';
-    return null;
-  };
-
-  // Extract text content from a list item line
-  const getListItemText = (line, type) => {
-    if (type === 'ol') return line.replace(/^\s*\d+[\.\)]\s/, '');
-    if (line.trim().startsWith('-')) return line.replace(/^\s*-\s*/, '');
-    return line.replace(/^\s*\*\s/, '');
-  };
-
-  // Format markdown-like content — groups consecutive list items into <ul>/<ol>
-  const formatContent = (content) => {
-    const lines = content.split('\n');
-    const result = [];
-    let i = 0;
-
-    while (i < lines.length) {
-      const line = lines[i];
-
-      // Code blocks (```)
-      if (line.trim().startsWith('```')) {
-        const codeLines = [];
-        i++;
-        while (i < lines.length && !lines[i].trim().startsWith('```')) {
-          codeLines.push(lines[i]);
-          i++;
-        }
-        result.push(
-          <pre key={`code-${i}`} style={{
-            backgroundColor: '#1f2937', color: '#e5e7eb', padding: '12px 16px',
-            borderRadius: '6px', fontSize: '13px', overflowX: 'auto',
-            fontFamily: 'monospace', margin: '8px 0', lineHeight: '1.5',
-          }}>
-            <code>{codeLines.join('\n')}</code>
-          </pre>
-        );
-        i++; // skip closing ```
-        continue;
-      }
-
-      // Headers (##)
-      if (line.startsWith('##')) {
-        result.push(
-          <h3 key={`h3-${i}`} className="ihcm-message-header">
-            {formatInline(line.replace(/^##\s*/, ''), `h3-${i}`)}
-          </h3>
-        );
-        i++;
-        continue;
-      }
-
-      // Collect consecutive list items into a proper <ul> or <ol>
-      const listType = getListType(line);
-      if (listType) {
-        const items = [];
-        const startIdx = i;
-        while (i < lines.length && getListType(lines[i]) === listType) {
-          items.push(
-            <li key={`li-${i}`} className="ihcm-message-bullet">
-              {formatInline(getListItemText(lines[i], listType), `li-${i}`)}
-            </li>
-          );
-          i++;
-        }
-        const ListTag = listType === 'ol' ? 'ol' : 'ul';
-        result.push(
-          <ListTag key={`${listType}-${startIdx}`} style={{ margin: '4px 0', paddingLeft: '24px' }}>
-            {items}
-          </ListTag>
-        );
-        continue;
-      }
-
-      if (line.trim() === '') {
-        result.push(<div key={`empty-${i}`} className="ihcm-message-spacing" />);
-      } else {
-        result.push(
-          <p key={`p-${i}`} className="ihcm-message-text">
-            {formatInline(line, `line-${i}`)}
-          </p>
-        );
-      }
-
-      i++;
-    }
-
-    return result;
-  };
 
   // Get applicable starters or draft starters
   const applicableStarters = isDraft
@@ -1178,54 +771,12 @@ export default function App() {
 
       {/* Conversation History Panel */}
       {showConversations && (
-        <div style={{
-          padding: '16px 24px',
-          backgroundColor: '#f8fafc',
-          borderBottom: '1px solid #e5e7eb',
-          maxHeight: '250px',
-          overflowY: 'auto'
-        }}>
-          <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: '600', color: '#1f2937' }}>
-            Recent Conversations
-          </h3>
-          {loadingConversations ? (
-            <p style={{ color: '#9ca3af', fontSize: '13px', margin: 0 }}>Loading...</p>
-          ) : conversationList.length === 0 ? (
-            <p style={{ color: '#9ca3af', fontSize: '13px', margin: 0 }}>
-              No saved conversations yet. Start chatting and your history will appear here.
-            </p>
-          ) : (
-            conversationList.map(conv => (
-              <button
-                key={conv.conversation_id}
-                onClick={() => handleLoadConversation(conv)}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '10px 12px',
-                  marginBottom: '6px',
-                  borderRadius: '6px',
-                  border: conversationId === conv.conversation_id ? '2px solid #2563eb' : '1px solid #e5e7eb',
-                  backgroundColor: conversationId === conv.conversation_id ? '#eff6ff' : 'white',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  fontFamily: 'inherit',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <strong style={{ color: '#1f2937' }}>{conv.title || 'Untitled'}</strong>
-                  <span style={{ color: '#9ca3af', fontSize: '11px' }}>
-                    {conv.message_count} msg{conv.message_count !== 1 ? 's' : ''}
-                  </span>
-                </div>
-                <div style={{ color: '#6b7280', fontSize: '12px', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {conv.last_message || '...'}
-                </div>
-              </button>
-            ))
-          )}
-        </div>
+        <ConversationHistoryPanel
+          conversationList={conversationList}
+          conversationId={conversationId}
+          loading={loadingConversations}
+          onLoadConversation={handleLoadConversation}
+        />
       )}
 
       {/* Upload error */}
@@ -1247,172 +798,15 @@ export default function App() {
 
       {/* Building History Panel */}
       {showHistory && activeBuildingId && activeBuildingId !== 'none' && (
-        <div style={{
-          padding: '16px 24px',
-          backgroundColor: '#f8fafc',
-          borderBottom: '1px solid #e5e7eb',
-          maxHeight: '300px',
-          overflowY: 'auto'
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '600', color: '#1f2937' }}>
-              Building History — {activeBuildings.find(b => b.id === activeBuildingId)?.label || activeBuildingId}
-            </h3>
-            <button
-              onClick={() => setShowAddEvent(!showAddEvent)}
-              style={{
-                padding: '4px 12px',
-                borderRadius: '4px',
-                border: '1px solid #d1d5db',
-                backgroundColor: 'white',
-                cursor: 'pointer',
-                fontSize: '12px',
-                fontWeight: '500',
-                color: '#4b5563'
-              }}
-            >
-              + Add Event
-            </button>
-          </div>
-
-          {/* Add Event Form */}
-          {showAddEvent && (
-            <div style={{
-              padding: '12px',
-              backgroundColor: 'white',
-              borderRadius: '6px',
-              border: '1px solid #d1d5db',
-              marginBottom: '12px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '8px'
-            }}>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <select
-                  value={newEvent.category}
-                  onChange={e => setNewEvent(prev => ({ ...prev, category: e.target.value }))}
-                  style={{ padding: '6px 8px', borderRadius: '4px', border: '1px solid #d1d5db', fontSize: '13px' }}
-                >
-                  {EVENT_CATEGORIES.map(cat => (
-                    <option key={cat.value} value={cat.value}>{cat.label}</option>
-                  ))}
-                </select>
-                <input
-                  type="date"
-                  value={newEvent.date}
-                  onChange={e => setNewEvent(prev => ({ ...prev, date: e.target.value }))}
-                  style={{ padding: '6px 8px', borderRadius: '4px', border: '1px solid #d1d5db', fontSize: '13px' }}
-                />
-              </div>
-              <input
-                type="text"
-                placeholder="Event title..."
-                value={newEvent.title}
-                onChange={e => setNewEvent(prev => ({ ...prev, title: e.target.value }))}
-                style={{ padding: '6px 8px', borderRadius: '4px', border: '1px solid #d1d5db', fontSize: '13px' }}
-              />
-              <input
-                type="text"
-                placeholder="Description (optional)..."
-                value={newEvent.description}
-                onChange={e => setNewEvent(prev => ({ ...prev, description: e.target.value }))}
-                style={{ padding: '6px 8px', borderRadius: '4px', border: '1px solid #d1d5db', fontSize: '13px' }}
-              />
-              <button
-                onClick={handleAddEvent}
-                disabled={!newEvent.title.trim()}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: '4px',
-                  border: 'none',
-                  backgroundColor: newEvent.title.trim() ? '#3b82f6' : '#d1d5db',
-                  color: 'white',
-                  cursor: newEvent.title.trim() ? 'pointer' : 'not-allowed',
-                  fontSize: '13px',
-                  fontWeight: '500',
-                  alignSelf: 'flex-start'
-                }}
-              >
-                Save Event
-              </button>
-            </div>
-          )}
-
-          {/* Survey History */}
-          {historyData.surveys.length > 0 && (
-            <div style={{ marginBottom: '12px' }}>
-              <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: '600', color: '#4b5563', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Surveys ({historyData.surveys.length})
-              </h4>
-              {historyData.surveys.map((survey, idx) => (
-                <div key={survey.id || idx} style={{
-                  padding: '8px 12px',
-                  backgroundColor: 'white',
-                  borderRadius: '4px',
-                  border: '1px solid #e5e7eb',
-                  marginBottom: '4px',
-                  fontSize: '13px'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <strong>{survey.date} — {survey.type} survey</strong>
-                    <span style={{ color: '#6b7280' }}>{survey.totalTags} citation(s)</span>
-                  </div>
-                  {survey.criticalTags?.length > 0 && (
-                    <div style={{ color: '#dc2626', fontSize: '12px', marginTop: '4px' }}>
-                      Critical: {survey.criticalTags.join(', ')}
-                    </div>
-                  )}
-                  {survey.citations?.length > 0 && (
-                    <div style={{ color: '#6b7280', fontSize: '12px', marginTop: '4px' }}>
-                      Tags: {survey.citations.map(c => c.fTag).join(', ')}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Event Timeline */}
-          {historyData.events.length > 0 && (
-            <div>
-              <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: '600', color: '#4b5563', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Events ({historyData.events.length})
-              </h4>
-              {historyData.events.map((event, idx) => (
-                <div key={event.id || idx} style={{
-                  padding: '8px 12px',
-                  backgroundColor: 'white',
-                  borderRadius: '4px',
-                  border: '1px solid #e5e7eb',
-                  marginBottom: '4px',
-                  fontSize: '13px'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <strong>{event.title}</strong>
-                    <span style={{
-                      fontSize: '11px',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      backgroundColor: '#f3f4f6',
-                      color: '#4b5563'
-                    }}>
-                      {event.category}
-                    </span>
-                  </div>
-                  <div style={{ color: '#6b7280', fontSize: '12px', marginTop: '2px' }}>
-                    {event.date} {event.description && `— ${event.description}`}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {historyData.surveys.length === 0 && historyData.events.length === 0 && (
-            <p style={{ color: '#9ca3af', fontSize: '13px', margin: 0 }}>
-              No history yet. Upload a 2567 or add events to build this building's timeline.
-            </p>
-          )}
-        </div>
+        <BuildingHistoryPanel
+          activeBuildingId={activeBuildingId}
+          activeBuildings={activeBuildings}
+          historyData={historyData}
+          onAddEvent={(eventData) => {
+            addEvent(activeBuildingId, eventData);
+            setHistoryData(getBuildingHistory(activeBuildingId));
+          }}
+        />
       )}
 
       {/* Workflow Selector & Panel */}
@@ -1612,86 +1006,15 @@ export default function App() {
             )}
           </div>
         ) : (
-          messages.map((msg, idx) => (
-            <div
-              key={idx}
-              className={`ihcm-message ihcm-message-${msg.role}`}
-              style={{
-                display: 'flex',
-                justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start'
-              }}
-            >
-              <div
-                className={`ihcm-message-bubble ihcm-message-bubble-${msg.role}`}
-                style={{
-                  maxWidth: '70%',
-                  padding: '12px 16px',
-                  borderRadius: '12px',
-                  backgroundColor:
-                    msg.role === 'user'
-                      ? activeRole?.color || '#3b82f6'
-                      : '#e5e7eb',
-                  color: msg.role === 'user' ? 'white' : '#1f2937',
-                  wordWrap: 'break-word',
-                  whiteSpace: 'pre-wrap',
-                  overflowWrap: 'break-word'
-                }}
-              >
-                <div className="ihcm-message-content">
-                  {msg.role === 'user' ? (
-                    <p style={{ margin: 0, fontSize: '14px', lineHeight: '1.5' }}>
-                      {msg.content}
-                    </p>
-                  ) : (
-                    <div style={{ fontSize: '14px', lineHeight: '1.6' }}>
-                      {formatContent(msg.content)}
-                    </div>
-                  )}
-                </div>
-                {/* Feedback & copy buttons for assistant messages */}
-                {msg.role === 'assistant' && (
-                  <div style={{
-                    display: 'flex', gap: '6px', marginTop: '8px', paddingTop: '6px',
-                    borderTop: '1px solid rgba(0,0,0,0.06)', alignItems: 'center'
-                  }}>
-                    {[
-                      { type: 'useful', label: 'Useful', icon: '\u2191' },
-                      { type: 'not_useful', label: 'Not useful', icon: '\u2193' },
-                      { type: 'wrong', label: 'Wrong', icon: '!' },
-                    ].map(fb => (
-                      <button
-                        key={fb.type}
-                        onClick={() => handleFeedback(idx, fb.type)}
-                        style={{
-                          padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
-                          border: feedback[idx] === fb.type ? '1px solid #2563eb' : '1px solid #d1d5db',
-                          backgroundColor: feedback[idx] === fb.type ? '#dbeafe' : 'transparent',
-                          color: feedback[idx] === fb.type ? '#1e40af' : '#9ca3af',
-                          cursor: 'pointer', fontWeight: '500',
-                        }}
-                      >
-                        {fb.icon} {fb.label}
-                      </button>
-                    ))}
-                    <button
-                      onClick={() => handleCopy(idx, msg.content)}
-                      style={{
-                        padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
-                        border: '1px solid #d1d5db',
-                        backgroundColor: copiedMsg === idx ? '#dcfce7' : 'transparent',
-                        color: copiedMsg === idx ? '#166534' : '#9ca3af',
-                        cursor: 'pointer', fontWeight: '500', marginLeft: 'auto',
-                      }}
-                    >
-                      {copiedMsg === idx ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))
+          <MessageList
+            messages={messages}
+            activeRole={activeRole}
+            feedback={feedback}
+            onFeedback={handleFeedback}
+            conversationId={conversationId}
+          />
         )}
-
+        
         {isLoading && (
           <div
             className="ihcm-typing-indicator"
