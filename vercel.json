@@ -1,0 +1,18 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "functions": {
+    "v2_definitive/api/chat.js": {
+      "maxDuration": 30
+    },
+    "api/parse-2567.js": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    { "source": "/api/chat", "destination": "/v2_definitive/api/chat" },
+    { "source": "/api/parse-2567", "destination": "/api/parse-2567" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

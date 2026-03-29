@@ -1,0 +1,687 @@
+IHCM Operating Intelligence Platform
+V2.0 — Full Build Specification
+PRD · Architecture · Data Model · Workflows · Build Sequence  |  March 2026
+Independence Healthcare Management  |  Confidential  |  2026
+1. Product Definition
+1.1  What this is
+IHCM Operating Intelligence Platform is a secure internal web application that turns IHCM's fragmented operational knowledge into fast, trustworthy, role-aware decision support for facility, regional, and central teams.
+It is not a chatbot. It is not five bots in a browser sidebar. It is the internal operating brain for a 7-building SNF operator scaling to 30+ buildings.
+1.2  What it does
+Gives fast, role-relevant answers grounded in IHCM's approved knowledge base
+Generates first-draft operating documents: Plans of Correction, denial appeals, census plans, referral outreach letters
+Retrieves approved playbooks, policies, and building-specific intelligence on demand
+Compares facilities against goals, peers, and historical patterns
+Captures institutional learning — successful interventions, resolved denial patterns, approved playbooks
+Improves recommendations over time through governed feedback loops
+1.3  Why V1 failed
+V1 was a widget, not a platform. The specific failure modes:
+2. Technical Architecture
+2.1  Stack decisions — final
+2.2  Project file structure
+ihcm-platform/
+├── app/
+│   ├── (auth)/              ← login, magic link callback
+│   ├── (platform)/          ← all authenticated routes
+│   │   ├── dashboard/       ← home dashboard
+│   │   ├── ask/             ← Q&A workspace
+│   │   ├── workflows/       ← structured workflow launcher
+│   │   │   ├── poc/         ← Plan of Correction
+│   │   │   ├── appeal/      ← denial/appeal
+│   │   │   ├── census/      ← census growth plan
+│   │   │   └── compare/     ← building comparison
+│   │   ├── building/[id]/   ← building intelligence view
+│   │   ├── knowledge/       ← knowledge admin (manager role only)
+│   │   └── settings/        ← user settings, role display
+│   └── api/
+│       ├── chat/route.js    ← main AI proxy
+│       ├── workflow/route.js← workflow generation proxy
+│       └── knowledge/route.js← knowledge retrieval
+├── components/
+│   ├── shell/              ← sidebar, topbar, nav
+│   ├── ask/                ← message thread, input, source drawer
+│   ├── workflows/          ← intake forms, draft preview
+│   └── building/           ← profile cards, metrics, flags
+├── lib/
+│   ├── supabase/           ← client, server, admin clients
+│   ├── ai/                 ← prompt builders, response parsers
+│   ├── knowledge/          ← retrieval, ranking, freshness
+│   └── rbac/               ← role definitions, permission checks
+├── middleware.js           ← auth gate on all (platform) routes
+└── supabase/
+└── migrations/         ← all schema SQL files numbered
+2.3  Auth and middleware
+Every route under app/(platform)/ is protected by middleware.js. Unauthenticated requests redirect to /login. Role is read from the profiles table and attached to the session on every request.
+// middleware.js — runs on every (platform) request
+import { createMiddlewareClient } from '@supabase/auth-helpers-nextjs'
+import { NextResponse } from 'next/server'
+export async function middleware(req) {
+const res = NextResponse.next()
+const supabase = createMiddlewareClient({ req, res })
+const { data: { session } } = await supabase.auth.getSession()
+if (!session) return NextResponse.redirect(new URL('/login', req.url))
+return res
+}
+export const config = { matcher: ['/(platform)/:path*'] }
+2.4  Risk tier system — hardcoded in lib/rbac/tiers.js
+Every request is classified into one of four tiers. The tier determines: source grounding requirements, assumption section visibility, caveat banners, and audit logging depth.
+3. Complete Data Model
+All SQL is production-ready. Run in order in Supabase SQL Editor. Each block is a separate migration file.
+3.1  Migration 001 — Core identity and buildings
+-- Enable UUID extension
+create extension if not exists "uuid-ossp";
+-- Roles enum
+create type user_role as enum (
+'mds_coordinator', 'don', 'facility_admin',
+'billing_rcm', 'regional_operator',
+'corporate_admin', 'knowledge_manager'
+);
+-- Profiles (extends Supabase auth.users)
+create table profiles (
+id uuid primary key references auth.users(id) on delete cascade,
+full_name text not null,
+role user_role not null default 'facility_admin',
+primary_building_id uuid,
+created_at timestamptz default now(),
+last_active_at timestamptz
+);
+-- Buildings
+create table buildings (
+id uuid primary key default uuid_generate_v4(),
+name text not null,
+short_name text not null,
+cms_provider_id text unique not null,
+state char(2) not null,
+market text,
+licensed_beds integer,
+status text default 'active',
+strategic_priority text,
+created_at timestamptz default now()
+);
+-- Seed all 7 IHCM buildings
+insert into buildings (name,short_name,cms_provider_id,state,market,licensed_beds,status,strategic_priority) values
+('Nightingale at Arkadelphia','Arkadelphia','045350','AR','Arkansas',100,'active','growth'),
+('Nightingale at Stonegate','Stonegate','045437','AR','Arkansas',76,'active','improving'),
+('Nightingale at Glenwood','Glenwood','045403','AR','Arkansas',72,'active','model'),
+('The Woods','The Woods','045176','AR','Arkansas',120,'active','census_upside'),
+('Nightingale at Crossett','Crossett','045190','AR','Arkansas',72,'active','turnaround'),
+('Villa at Marymount','Marymount','366335','OH','Ohio',null,'active','strong_performer'),
+('Nightingale Erie','Erie','395042','PA','Pennsylvania',null,'active','pilot');
+3.2  Migration 002 — Building metrics and profiles
+-- Structured building metrics (refreshed weekly)
+create table building_metrics (
+id uuid primary key default uuid_generate_v4(),
+building_id uuid not null references buildings(id),
+metric_date date not null default current_date,
+census_current integer,
+census_licensed integer,
+census_target integer,
+skilled_mix_pct numeric(5,2),
+skilled_mix_target numeric(5,2),
+medicare_pct numeric(5,2),
+medicaid_pct numeric(5,2),
+managed_care_pct numeric(5,2),
+private_pct numeric(5,2),
+ot_pct numeric(5,2),
+ot_target numeric(5,2),
+ebitdar_ytd numeric(12,2),
+ebitdar_budget numeric(12,2),
+open_positions text[],
+top_diagnoses text[],
+top_referral_sources jsonb,
+census_q2_target integer,
+census_obstacle text,
+last_survey_date date,
+open_ftags text[],
+red_qms text[],
+administrator_name text,
+administrator_tenure_months integer,
+don_name text,
+don_tenure_months integer,
+top_worries text[],
+recent_history text,
+refreshed_by uuid references profiles(id),
+refreshed_at timestamptz default now(),
+confidence text default 'low',
+unique(building_id, metric_date)
+);
+-- Helper: get latest metrics per building
+create view v_latest_building_metrics as
+select distinct on (building_id) *
+from building_metrics
+order by building_id, metric_date desc;
+3.3  Migration 003 — Knowledge base
+create type knowledge_status as enum ('draft','approved','archived');
+create type knowledge_source_type as enum (
+'corporate_playbook','building_profile','state_reimbursement',
+'payer_guidance','survey_history','poc_template',
+'referral_intelligence','operator_best_practice','approved_faq','policy'
+);
+create table knowledge_sources (
+id uuid primary key default uuid_generate_v4(),
+title text not null,
+source_type knowledge_source_type not null,
+owner_id uuid references profiles(id),
+approver_id uuid references profiles(id),
+effective_date date,
+review_due_date date,
+building_id uuid references buildings(id),
+region text,
+state char(2),
+tags text[],
+status knowledge_status default 'draft',
+citation_text text,
+full_content text,
+version integer default 1,
+embedding vector(1536),
+storage_path text,
+created_at timestamptz default now(),
+updated_at timestamptz default now()
+);
+-- Full text search index
+create index knowledge_fts on knowledge_sources
+using gin(to_tsvector('english', coalesce(title,'') || ' ' || coalesce(full_content,'')));
+-- Knowledge versions (audit trail for changes)
+create table knowledge_versions (
+id uuid primary key default uuid_generate_v4(),
+source_id uuid not null references knowledge_sources(id),
+version integer not null,
+full_content text,
+changed_by uuid references profiles(id),
+changed_at timestamptz default now(),
+change_note text
+);
+3.4  Migration 004 — Conversations and messages
+create type workflow_type as enum (
+'ask','poc_draft','appeal_draft','census_plan',
+'building_comparison','referral_plan','survey_prep'
+);
+create type risk_tier as enum ('t1','t2','t3','t4');
+create table conversations (
+id uuid primary key default uuid_generate_v4(),
+user_id uuid not null references profiles(id),
+building_id uuid references buildings(id),
+workflow_type workflow_type default 'ask',
+risk_tier risk_tier default 't1',
+title text,
+is_draft_workflow boolean default false,
+intake_data jsonb,
+status text default 'active',
+created_at timestamptz default now(),
+updated_at timestamptz default now()
+);
+create table messages (
+id uuid primary key default uuid_generate_v4(),
+conversation_id uuid not null references conversations(id) on delete cascade,
+role text not null check (role in ('user','assistant','system')),
+content text not null,
+sources_used uuid[],
+assumptions text[],
+risk_tier risk_tier,
+model_version text,
+is_draft boolean default false,
+draft_edited boolean default false,
+draft_exported boolean default false,
+created_at timestamptz default now()
+);
+3.5  Migration 005 — Feedback, audit, and review queue
+create table feedback_events (
+id uuid primary key default uuid_generate_v4(),
+message_id uuid not null references messages(id),
+user_id uuid not null references profiles(id),
+rating text check (rating in ('useful','not_useful','correct','questionable','saved')),
+note text,
+created_at timestamptz default now()
+);
+create table audit_events (
+id uuid primary key default uuid_generate_v4(),
+user_id uuid references profiles(id),
+role user_role,
+event_type text not null,
+building_id uuid references buildings(id),
+conversation_id uuid references conversations(id),
+message_id uuid references messages(id),
+workflow_type workflow_type,
+risk_tier risk_tier,
+sources_retrieved uuid[],
+model_version text,
+metadata jsonb,
+created_at timestamptz default now()
+);
+create table review_queue (
+id uuid primary key default uuid_generate_v4(),
+message_id uuid references messages(id),
+queue_reason text not null,
+status text default 'pending' check (status in ('pending','approved','rejected','promoted')),
+reviewer_id uuid references profiles(id),
+promoted_source_id uuid references knowledge_sources(id),
+review_note text,
+created_at timestamptz default now(),
+reviewed_at timestamptz
+);
+3.6  Migration 006 — RLS policies
+-- Enable RLS on all tables
+alter table profiles enable row level security;
+alter table building_metrics enable row level security;
+alter table knowledge_sources enable row level security;
+alter table conversations enable row level security;
+alter table messages enable row level security;
+alter table feedback_events enable row level security;
+alter table audit_events enable row level security;
+alter table review_queue enable row level security;
+-- Profiles: users see only their own
+create policy "own profile" on profiles for all using (id = auth.uid());
+create policy "admin read all profiles" on profiles for select
+using (auth.email() in (select email from auth.users where id in
+(select id from profiles where role in ('corporate_admin','knowledge_manager'))));
+-- Conversations: users see only their own
+create policy "own conversations" on conversations for all using (user_id = auth.uid());
+create policy "regional sees building convos" on conversations for select
+using (exists (select 1 from profiles where id = auth.uid() and role in ('regional_operator','corporate_admin')));
+-- Messages: inherit conversation access
+create policy "messages via conversation" on messages for all
+using (conversation_id in (select id from conversations where user_id = auth.uid()));
+-- Knowledge: approved content visible to all, draft only to managers
+create policy "approved knowledge public" on knowledge_sources for select
+using (status = 'approved');
+create policy "managers see all knowledge" on knowledge_sources for all
+using (exists (select 1 from profiles where id = auth.uid() and role in ('knowledge_manager','corporate_admin')));
+-- Building metrics: all authenticated users can read
+create policy "read building metrics" on building_metrics for select using (auth.uid() is not null);
+create policy "regional updates metrics" on building_metrics for insert
+using (exists (select 1 from profiles where id = auth.uid() and role in ('regional_operator','corporate_admin','facility_admin')));
+-- Audit events: write by service role, read by admins only
+create policy "audit read admins" on audit_events for select
+using (exists (select 1 from profiles where id = auth.uid() and role in ('corporate_admin','knowledge_manager')));
+-- Review queue: knowledge managers only
+create policy "review queue managers" on review_queue for all
+using (exists (select 1 from profiles where id = auth.uid() and role in ('knowledge_manager','corporate_admin')));
+4. Roles and Permissions
+4.1  Role definitions
+4.2  RBAC middleware pattern
+// lib/rbac/check.js
+export const ROLE_PERMISSIONS = {
+poc_workflow:      ['don','facility_admin','regional_operator','corporate_admin'],
+appeal_workflow:   ['billing_rcm','regional_operator','corporate_admin'],
+census_workflow:   ['facility_admin','regional_operator','corporate_admin'],
+compare_workflow:  ['regional_operator','corporate_admin'],
+knowledge_admin:   ['knowledge_manager','corporate_admin'],
+audit_logs:        ['corporate_admin'],
+update_metrics:    ['facility_admin','regional_operator','corporate_admin'],
+}
+export function canAccess(userRole, capability) {
+return (ROLE_PERMISSIONS[capability] || []).includes(userRole)
+}
+5. API Route Specifications
+5.1  POST /api/chat
+Main Q&A endpoint. Handles all Tier 1–3 requests. Tier 4 goes through /api/workflow.
+// app/api/chat/route.js — request body shape
+{
+conversationId: string | null,   // null = start new conversation
+buildingId: string | null,        // injects building context
+message: string,                  // user's question
+workflowType: string,             // default: 'ask'
+}
+Server-side logic:
+Authenticate user via Supabase server client. Get role from profiles table.
+Classify request tier using lib/ai/classify.js (keyword + pattern matching, no extra API call).
+Retrieve building context: SELECT * FROM v_latest_building_metrics WHERE building_id = $1.
+Retrieve relevant knowledge: full-text search on knowledge_sources WHERE status='approved', ranked by relevance.
+Build system prompt: role prompt + building context from structured data + retrieved knowledge snippets + tier-appropriate suffix.
+Call Anthropic API with assembled prompt and conversation history.
+Store conversation and message in Supabase (create conversation if conversationId is null).
+Write audit_event with all metadata.
+Return response with sources_used array and risk_tier.
+5.2  POST /api/workflow
+Structured workflow endpoint for Tier 4 document drafting. Requires intake_data to be complete before calling Anthropic.
+// Request body
+{
+workflowType: 'poc_draft' | 'appeal_draft' | 'census_plan' | 'building_comparison',
+buildingId: string,
+intakeData: object,   // workflow-specific required fields
+}
+Each workflow type validates its required intake fields server-side before any API call is made. Missing fields return 422 with a list of what's needed.
+5.3  POST /api/knowledge/search
+// Request
+{ query: string, buildingId?: string, state?: string, sourceType?: string }
+// Response
+{ sources: [{ id, title, citation_text, effective_date, owner, relevance_score }] }
+5.4  POST /api/feedback
+{ messageId: string, rating: string, note?: string }
+Writes to feedback_events. If rating is 'questionable' or 'saved', auto-creates a review_queue entry.
+6. Knowledge Architecture
+6.1  How building context works in V2
+This is the most important architectural change from V1. Building context is no longer a hand-written prompt string. It is assembled at runtime from the building_metrics table — structured, versioned, and owned data.
+// lib/knowledge/buildingContext.js
+export async function getBuildingContext(buildingId, userRole) {
+const metrics = await supabase
+.from('v_latest_building_metrics')
+.select('*')
+.eq('building_id', buildingId)
+.single()
+if (!metrics.data) return null
+const m = metrics.data
+const ageDays = daysSince(m.refreshed_at)
+const freshnessWarning = ageDays > 14 ? `[DATA ${ageDays} DAYS OLD — may be stale]` : ''
+// Assemble role-specific context slice
+const base = `Building: ${m.name} (CMS ${m.cms_provider_id}, ${m.state})
+Census: ${m.census_current}/${m.census_licensed}. Trend: ${m.census_trend}.
+Strategic priority: ${m.strategic_priority}. ${freshnessWarning}`
+const byRole = {
+mds_coordinator: `Skilled mix: ${m.skilled_mix_pct}% (target ${m.skilled_mix_target}%).
+Top diagnoses: ${m.top_diagnoses?.join(', ')}. Payer mix: Medicare ${m.medicare_pct}%.`,
+don: `Last survey: ${m.last_survey_date}. Open F-tags: ${m.open_ftags?.join(', ') || 'none'}.
+Red QMs: ${m.red_qms?.join(', ') || 'none'}. OT: ${m.ot_pct}% (target ${m.ot_target}%).`,
+facility_admin: `Census target Q2: ${m.census_q2_target}. Obstacle: ${m.census_obstacle}.
+Top referral sources: ${JSON.stringify(m.top_referral_sources)}.
+EBITDAR YTD: ${m.ebitdar_ytd} vs budget ${m.ebitdar_budget}.`,
+regional_operator: `Admin: ${m.administrator_name} (${m.administrator_tenure_months}mo).
+DON: ${m.don_name} (${m.don_tenure_months}mo).
+Top worries: ${m.top_worries?.join('; ')}. ${m.recent_history}`,
+}
+return base + '\n' + (byRole[userRole] || '')
+}
+6.2  Knowledge retrieval function
+// lib/knowledge/retrieve.js
+export async function retrieveKnowledge(query, opts = {}) {
+const { buildingId, state, sourceTypes, limit = 5 } = opts
+let q = supabase
+.from('knowledge_sources')
+.select('id,title,citation_text,effective_date,full_content,source_type')
+.eq('status', 'approved')
+.textSearch('full_content', query, { type: 'websearch' })
+.limit(limit)
+if (buildingId) q = q.or(`building_id.eq.${buildingId},building_id.is.null`)
+if (state) q = q.or(`state.eq.${state},state.is.null`)
+if (sourceTypes) q = q.in('source_type', sourceTypes)
+const { data } = await q
+return data || []
+}
+6.3  Freshness rules by knowledge type
+7. Structured Workflow Specifications
+These are the four T4 structured workflows for Phase 1. Each has a defined intake form, validation rules, system prompt template, output structure, and required caveats.
+7.1  Plan of Correction (POC) workflow
+Intake fields — all required
+citation_tag — F-tag number (e.g. F689)
+deficiency_summary — brief description of what was cited
+immediate_jeopardy — boolean: was IJ declared?
+current_mitigation — what has already been done since the survey
+building_id — which building
+citation_date — date of survey/citation
+Output structure — required sections
+Section 1: Immediate corrective actions (within 24/48/72 hours)
+Section 2: Root cause analysis
+Section 3: Systemic correction plan
+Section 4: Monitoring and ongoing measurement plan
+Section 5: Responsible owner and completion dates
+Section 6: Assumptions made — what the system did not know
+Banner: 'This draft requires review by a qualified healthcare compliance professional before submission to the state agency. Do not submit without review.'
+System prompt template (abbreviated)
+You are an expert SNF compliance advisor drafting a Plan of Correction for Independence Healthcare Management.
+BUILDING CONTEXT:
+{buildingContext}
+CITED DEFICIENCY:
+F-tag: {citation_tag}
+Deficiency: {deficiency_summary}
+Immediate jeopardy: {immediate_jeopardy}
+Current mitigation: {current_mitigation}
+RETRIEVED GUIDANCE:
+{retrievedKnowledge}
+Draft a complete Plan of Correction with all required sections. For every recommendation, note whether it is based on retrieved IHCM guidance or general best practice. Include an explicit assumptions section listing any information you did not have.
+Do not express final compliance certainty. This is a first draft for professional review.
+7.2  Denial / Appeal workflow
+Intake fields — all required
+payer — payer name (e.g. UnitedHealthcare MA, Arkansas DHS Medicaid)
+denial_code — e.g. CO-96, CO-4, PR-96
+denial_reason — plain text reason from EOB/remittance
+service_dates — admission and denial date
+auth_details — was auth obtained? Auth number if yes.
+documentation_status — what clinical docs exist to support appeal
+Output structure
+Recommended next step (appeal vs. redetermination vs. reconsideration)
+Appeal pathway with timeline and deadlines
+Evidence checklist — specific documents to gather
+Draft appeal letter (if requested)
+Payer-specific notes from retrieved guidance
+Assumptions section
+7.3  Census Growth Plan workflow
+Intake fields
+building_id — auto-fills current census from metrics table
+target_census — confirmed by user or pulled from metrics
+timeframe_days — 30, 60, or 90
+top_constraints — what's blocking growth right now (free text)
+Output structure
+Week-by-week milestone table
+Priority referral actions with named targets from building profile
+Discharge planner outreach list
+Internal bottleneck checklist
+Weekly scorecard metrics to track
+7.4  Building Comparison workflow
+Inputs
+building_ids[] — 2 to 7 buildings to compare
+focus_dimension — census | quality | staffing | financial | all
+Output — mandatory elements
+Comparative snapshot table with freshness dates shown for every metric
+Largest performance gaps identified
+Urgency ranking with rationale
+Top 3 operator actions per building
+Missing data called out explicitly — no silent gaps
+8. UI Screen Specifications
+V2 keeps role-specific entry points (the V1 insight that was correct) but adds a proper platform shell with shared navigation, building context, and workflow access.
+8.1  Platform shell
+Left sidebar: role-specific icon nav — Dashboard, Ask, Workflows, Building, Knowledge (managers only), Settings
+Top bar: building selector dropdown (populates from buildings table), freshness indicator for current building data, user avatar + role pill
+All screens share the shell — no separate apps per role
+Sidebar width: 56px collapsed (icons), 220px expanded (icons + labels). Default: expanded on desktop, collapsed on mobile.
+8.2  Home Dashboard
+Recent conversations list with workflow type tags
+Building health cards for user's building(s) — census %, OT%, last survey date
+Stale knowledge alerts (knowledge_sources where review_due_date < today)
+Quick-launch buttons for the most common workflow for that role
+For regional/corporate: all-buildings at-a-glance grid
+8.3  Ask Workspace
+Left: conversation thread with user/assistant bubbles
+Right (source drawer): slides in when assistant cites sources — shows source title, owner, date, and short excerpt
+Bottom: text input with building context pill (shows active building), risk tier badge (T1–T4) that updates as user types
+Above each assistant message: small source count badge. Click opens source drawer.
+T3+ messages: yellow 'Review before use' banner below response
+T4 messages: red 'Professional review required' banner + 'Open in Draft Workspace' button
+Below each assistant message: thumbs up / thumbs down / save buttons
+8.4  Draft Workspace (Workflows)
+Step 1: Workflow selector — cards for POC, Appeal, Census Plan, Building Comparison
+Step 2: Intake form — required fields for selected workflow. Form validates before proceeding. Missing fields shown with red outlines.
+Step 3: Source review — shows retrieved knowledge sources that will be used. User can deselect or add more context.
+Step 4: Generated draft — full document in right panel. Editable rich text. Left panel shows: sources used, assumptions, missing information.
+Step 5: Export — Copy to clipboard, Download as .docx, or Mark as reviewed.
+8.5  Building Intelligence View
+Header: building name, CMS ID, strategic priority badge, last refreshed date
+Metrics grid: census, skilled mix, OT%, EBITDAR vs budget — each with trend arrow and data age
+Survey section: last survey date, open F-tags list, upcoming survey window estimate
+QMs section: red/yellow/green for top 8 quality measures
+Referral sources section: top sources from metrics with last contact date
+Leadership section: admin and DON names with tenure
+Strategic priorities section: current priority label + top worries from last intake
+Edit button (facility_admin+): opens inline edit form to update any metric. Saves to building_metrics table with refreshed_by and refreshed_at.
+8.6  Knowledge Admin (knowledge_manager + corporate_admin only)
+Upload panel: drag-and-drop PDF/document upload, metadata form (title, type, building, state, tags, review date)
+Knowledge library: filterable table of all sources with status badges
+Review queue: pending items from auto-flagged feedback — approve/reject/promote controls
+Stale alert dashboard: sources past review_due_date grouped by type
+9. Build Sequence
+Four phases. Each phase has a clear exit criteria — do not advance until the exit criteria is met. Estimated times assume Dov is building with Claude as the AI pair programmer.
+Phase 0 — Foundation (Days 1–3)
+Exit criteria: Authenticated user can log in, see their role, and select a building. Zero code after this point runs without identity.
+Create new Next.js 14 project: npx create-next-app@latest ihcm-platform --typescript --app
+Install: @supabase/supabase-js @supabase/auth-helpers-nextjs
+Create new Supabase project (separate from Executive Academy — do not share)
+Run Migration 001 (identity + buildings) in Supabase SQL Editor
+Run Migration 006 (RLS policies)
+Build app/(auth)/login/page.jsx — magic link email form
+Build app/(auth)/callback/route.js — Supabase auth callback handler
+Build middleware.js — redirect unauthenticated to /login
+Build platform shell layout — sidebar with role-aware nav items
+Seed the 7 IHCM buildings (already in Migration 001)
+Deploy to Vercel. Set SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY
+Manually create Dov's user account via Supabase Auth dashboard. Set role = 'corporate_admin' in profiles table.
+Phase 1 — Trustworthy Ask Workspace (Days 4–10)
+Exit criteria: Authenticated user can ask a question, get a cited answer grounded in building context, and that session is stored server-side with full audit trail.
+Run Migrations 002, 003, 004, 005
+Build lib/knowledge/buildingContext.js — runtime assembly from building_metrics table
+Build lib/knowledge/retrieve.js — full-text search on knowledge_sources
+Build lib/ai/classify.js — keyword-based tier classification (T1–T4)
+Build lib/ai/prompts.js — role-specific system prompts + building context injector
+Build app/api/chat/route.js — full pipeline: auth → tier → context → retrieve → prompt → Anthropic → store → audit → return
+Build Ask Workspace UI (app/(platform)/ask/page.jsx): conversation thread, input, source drawer
+Build feedback buttons (thumbs up/down/save) → POST /api/feedback
+Build Building Intelligence view — read-only at this stage, pulls from v_latest_building_metrics
+Populate first knowledge sources: paste MDS guidance, AR/OH/PA Medicaid basics, IHCM core values doc, survey readiness checklist
+Run QA tests: auth bypass attempt, role restriction checks, API key not in browser, source citations present on T3 responses
+Phase 2 — Structured Workflows (Days 11–20)
+Exit criteria: POC workflow and Census Plan workflow produce useful first-draft documents that the DON and admin teams would actually edit and use.
+Build app/api/workflow/route.js — structured intake validation + Anthropic call + draft storage
+Build Workflow Launcher screen with 4 workflow cards
+Build POC intake form (all required fields per Section 7.1)
+Build Appeal intake form (Section 7.2)
+Build Census Plan intake form (Section 7.3)
+Build Draft Workspace UI — 5-step flow: select → intake → source review → draft → export
+Build .docx export using the docx npm library (same pattern as existing IHCM Word docs)
+Build Knowledge Admin screen — upload, metadata form, review queue
+Upload POC template, denial appeal templates, census playbook as approved knowledge sources
+Pilot: Azra runs 3 real POC workflows. Eli runs 3 real appeal workflows. Collect feedback.
+Phase 3 — Learning Engine (Days 21–30)
+Exit criteria: High-quality answers are being promoted to reusable knowledge. Review queue is being actively used. Platform shows measurable improvement from week 1 to week 3.
+Build review queue UI in Knowledge Admin — approve/reject/promote controls
+Build artifact promotion flow — promoted answer becomes a knowledge_source record
+Build stale knowledge dashboard — sources past review_due_date
+Build basic analytics view for corporate_admin: weekly active users, workflow completions, answer usefulness rate
+Add pgvector extension to Supabase. Generate embeddings for approved knowledge sources using Anthropic embeddings API. Switch retrieve.js to vector search.
+Add building metrics edit flow — facility admins can update their building's metrics from the Building Intelligence view
+Add bulk import from intake Excel — parse completed workbook, write to building_metrics table
+Full rollout to all 7 buildings
+10. QA Requirements
+V2 requires a substantially higher QA bar than v1. These are the test categories and blockers.
+10.1  Security tests — all are BLOCKERS
+Unauthenticated request to any /platform route redirects to /login — no content served
+User with role 'mds_coordinator' cannot access /knowledge admin routes — returns 403
+User with role 'facility_admin' for Crossett cannot read Glenwood conversations — RLS blocks it
+ANTHROPIC_API_KEY not present in any browser-side JS bundle
+Supabase service role key not present in any browser-side code
+POST /api/chat without valid session cookie returns 401
+Review queue not accessible to facility_admin — returns 403
+10.2  Knowledge and retrieval tests
+Archived knowledge sources do not appear in retrieval results
+Draft knowledge sources do not appear in retrieval results
+Building-specific knowledge for Crossett appears for a Crossett user asking a relevant question
+Stale knowledge source (review_due_date in the past) shows freshness warning in source drawer
+T3 response always includes at least one source citation. If no source found, response explicitly states 'No approved guidance found for this question — answer based on general SNF best practice.'
+T4 POC workflow blocked from final draft generation if POC template knowledge source is stale
+10.3  Workflow tests
+POC intake form cannot be submitted with any required field empty — form validation blocks it
+POC draft always contains all 6 required sections
+POC draft always shows 'Professional review required' banner
+Census plan output always references the named referral sources from building_metrics, not generic placeholders
+Building comparison output always shows data freshness date for every metric
+Building comparison output explicitly flags any metric that is null or missing
+10.4  Audit trail tests
+Every POST /api/chat creates exactly one audit_events record
+Every POST /api/workflow creates exactly one audit_events record
+audit_events record contains: user_id, role, building_id, workflow_type, risk_tier, sources_retrieved, model_version
+Feedback submission creates feedback_events record with message_id and user_id
+'questionable' or 'saved' feedback auto-creates review_queue entry
+10.5  V2 go/no-go gate — all must be true before broad rollout
+11. Environment Variables and Deploy Reference
+11.1  Required environment variables
+11.2  First deploy commands
+cd C:\Users\DovBraun\ihcm-platform
+npm install
+npx vercel --prod
+Vercel prompts: set up = Y, new project = Y, name = ihcm-platform, directory = . (Enter), override = N.
+Then add all 4 env vars in Vercel dashboard → Settings → Environment Variables → redeploy once.
+11.3  Supabase project setup
+Create new project at supabase.com (do NOT reuse Executive Academy project)
+Name: IHCM Platform. Region: US East (closest to your team).
+Go to SQL Editor. Run migrations 001–006 in order.
+Go to Authentication → Email Templates → customize the magic link email with IHCM branding.
+Go to Authentication → URL Configuration → set Site URL to https://ihcm-platform.vercel.app
+Go to Storage → create bucket named 'knowledge-docs' with private access.
+12. Success Metrics
+Do not track number of chats. Track whether the platform is changing how operators work.
+North-star metric
+Percent of high-value operator workflows completed with a useful, source-grounded output in under 5 minutes.
+Supporting metrics — tracked weekly
+IHCM Operating Intelligence Platform — V2.0 Build Specification
+Independence Healthcare Management  |  Confidential  |  March 2026
+[TABLE]
+Platform | IHCM Operating Intelligence Platform — internal secure web app
+Version | V2.0 — replaces the v1 bot widget entirely
+Audience | Dov Braun (builder/owner) · QA · future engineering contributors
+Tech stack | Next.js 14 App Router · Supabase (Auth + Postgres + Storage) · Vercel · Anthropic Claude Sonnet
+Repo | DBIND26/ihcm-platform (new repo — do not build on ihcm-bots)
+Deploy | npx vercel --prod from project root · same pattern as indhcm-academy
+Why V2 | V1 widget had weak adoption. No auth, no server memory, no knowledge architecture, no structured workflows. V2 is the real product.
+[TABLE]
+V1 failure | V2 fix
+No auth — shared URL | Supabase Auth with email magic link. Role assigned on first login. Every session is identity-bound.
+localStorage — not memory | Server-side conversations table in Supabase. Every message stored with user_id, role, building, workflow type, and timestamp.
+Prompt strings — not knowledge | Structured knowledge_sources table. Every knowledge item has owner, approver, effective date, review date, and status.
+No structured workflows | Workflow templates with required intake fields before generation. POC, appeal, census plan, building comparison all have structured entry points.
+No source grounding | Every high-stakes answer shows source title, owner, and date. Assumptions section required for Tier 3+ outputs.
+No learning loop | Feedback on every answer. Edited drafts captured. Review queue for knowledge promotion. Platform compounds with use.
+No audit trail | audit_events table logs every request: user, role, building, workflow, sources retrieved, model version, answer id.
+[TABLE]
+Layer | Technology | Why
+Frontend | Next.js 14 App Router + React 18 | SSR for auth-protected routes. Same pattern as ihcm-command. App Router enables route-level RBAC middleware.
+Auth | Supabase Auth (magic link) | Already implemented in Executive Academy. No new account. Email magic link = no password management. Role assigned in profiles table on first login.
+Database | Supabase Postgres + RLS | Row Level Security enforces role boundaries at database layer — not just API layer. Already battle-tested in Executive Academy security audit.
+File storage | Supabase Storage | PDF and document uploads for knowledge base. Bucket-level RLS matches database roles.
+API / orchestration | Next.js Route Handlers (app/api/) | Server-side only. API key never in browser. Same proxy pattern proven in v1.
+AI model | Anthropic Claude Sonnet 4 (claude-sonnet-4-20250514) | Same model and key already in use across all IHCM projects. Sonnet balances quality and cost at scale.
+Deployment | Vercel (npx vercel --prod) | Same pattern as all 4 existing IHCM deployments. No new infrastructure.
+Knowledge retrieval | Supabase full-text search (Phase 1) → pgvector (Phase 2) | Start with structured SQL queries and Postgres full-text search. Add pgvector embeddings in Phase 2 when knowledge base has 50+ documents.
+[TABLE]
+Tier | Name | Examples | Controls | Max tokens
+T1 | Informational | What is PDPM? How does Section GG work? Census calculation. | No special controls. Standard response. | 1,000
+T2 | Operational recommendation | Census growth advice, staffing strategy, L10 scorecard setup, referral source priorities. | Source recommended. Building context required. | 1,500
+T3 | Reimbursement / compliance | NTA coding, HIPPS validation, MA appeal pathway, denial root cause, ARD timing. | Source required. Assumptions section. 'Review before use' banner. | 2,000
+T4 | Document drafting | Plan of Correction, denial appeal letter, family communication, regulatory response. | Structured intake required. Source basis shown. Audit log mandatory. 'Professional review required' banner. | 3,000
+[TABLE]
+Role | Who | Allowed capabilities
+mds_coordinator | MDS coordinators all buildings | Ask workspace (MDS/clinical focus), view own conversations, view approved knowledge, submit feedback
+don | DONs and ADONs | Ask + draft workspace (clinical/survey/QAPI), POC workflow, view building QM data, view approved knowledge, submit feedback
+facility_admin | Building administrators | Full ask + all draft workflows, building intelligence view for own building, census plan workflow, update building metrics for own building
+billing_rcm | Eli Braun + billing team | Ask workspace (billing/RCM focus), appeal draft workflow, own conversations only
+regional_operator | Azra, Steven, Natasha | All workflows, all building intelligence views, building comparison workflow, read all building conversations, update all building metrics
+corporate_admin | Dov Braun | Full access to everything including audit logs, user management, all conversations, knowledge management
+knowledge_manager | Designated reviewer (Dov initially) | Upload knowledge sources, approve/archive content, manage review queue, promote artifacts, view all feedback
+[TABLE]
+Source type | Review cadence | Stale threshold | Action when stale
+Building metrics | Weekly manual or daily feed | 14 days | Show freshness warning in context. Flag in building intelligence view.
+Payer guidance (MA/Medicaid) | Upon change + monthly | 45 days | Show staleness warning on T3/T4 workflows. Recommend review.
+Survey playbooks / POC templates | After each major event + quarterly | 90 days | Block T4 POC workflow from final draft until reviewed.
+Operator best practices | Before promotion + 6 months | 180 days | Move to review queue. Show warning on retrieval.
+State reimbursement rules | Quarterly + upon regulation change | 90 days | Show prominent warning on T3 reimbursement guidance.
+[TABLE]
+Condition | Required | Verified by
+Auth + RBAC — all security tests pass | MUST PASS | Dov — Phase 1
+T3/T4 responses always show source basis | MUST PASS | Dov — Phase 1
+Server-side conversation storage verified | MUST PASS | Dov — Phase 1
+Audit events table populated on every request | MUST PASS | Dov — Phase 1
+Building context from structured metrics (not prompt strings) | Must pass | Dov — Phase 1
+POC workflow pilot passed with Azra (3 real POCs) | Must pass | Azra — Phase 2
+Feedback and review queue operational | Must pass | Dov — Phase 3
+Data retention policy defined and documented | Must pass | Dov — Phase 0
+[TABLE]
+Variable | Value source | Where set
+NEXT_PUBLIC_SUPABASE_URL | New Supabase project settings → API → Project URL | Vercel + .env.local
+NEXT_PUBLIC_SUPABASE_ANON_KEY | New Supabase project settings → API → anon public key | Vercel + .env.local
+SUPABASE_SERVICE_ROLE_KEY | New Supabase project settings → API → service_role secret key | Vercel only — never browser
+ANTHROPIC_API_KEY | Same key from ihcm-dashboard and indhcm-academy | Vercel only — never browser
+[TABLE]
+Metric | How measured | Target at 30 days
+Weekly active users by role | COUNT(DISTINCT user_id) from conversations WHERE created_at > 7 days ago | >8 of ~15 eligible users
+Workflow completion rate | COUNT(conversations WHERE status='complete') / COUNT(conversations WHERE workflow_type != 'ask') | >70%
+Answer usefulness rate | COUNT(feedback WHERE rating='useful') / COUNT(feedback) | >80%
+T4 outputs edited before export | COUNT(messages WHERE is_draft=true AND draft_edited=true) / COUNT(draft messages) | <40% (means drafts are already good)
+Knowledge promotions | COUNT(review_queue WHERE status='promoted') | >3 in first 30 days
+Stale source incidence | COUNT(knowledge_sources WHERE review_due_date < today AND status='approved') | 0 at launch, <5% ongoing
+[COMMENTS]
+[FOOTNOTES]

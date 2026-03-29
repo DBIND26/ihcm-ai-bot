@@ -1,0 +1,268 @@
+IHCM Operating Intelligence Platform
+V2.2 — Surgical Correction Set
+4 targeted fixes on V2.1  |  No P0 findings remain  |  March 2026
+Independence Healthcare Management  |  Confidential  |  2026
+1. Fix: census_trend view — Migration 002 replacement
+[P1] BUG: V2.1 applied lag() inside the subquery that had already reduced to one row per building using distinct on. With only one row per building remaining, lag() has nothing to compare against and always returns NULL, collapsing every building to the 'flat' fallback.
+FIX: View rewritten using a CTE. Row 1 (latest) and Row 2 (prior) are selected separately using row_number(). The trend is computed by comparing the two rows before any distinct reduction. The outer query returns one row per building with an accurate census_trend.
+Replacement for Migration 002 — drop and recreate the view
+Run this in Supabase SQL Editor after Migration 002 has already run. It drops the broken view and replaces it.
+-- Drop the V2.1 view
+drop view if exists v_latest_building_metrics;
+-- Replacement view: CTE derives trend before reducing to one row per building
+create view v_latest_building_metrics as
+with ranked as (
+-- Assign row numbers: 1 = most recent, 2 = second most recent
+select
+bm.*,
+row_number() over (
+partition by bm.building_id
+order by bm.metric_date desc
+) as rn
+from building_metrics bm
+),
+latest as (
+select * from ranked where rn = 1
+),
+prior as (
+select building_id, census_current as prior_census
+from ranked where rn = 2
+)
+select
+l.*,
+b.name,
+b.short_name,
+b.cms_provider_id,
+b.state,
+b.market,
+b.strategic_priority,
+-- Trend derived from comparison of row 1 vs row 2
+-- If no prior row exists, defaults to 'flat' (building has only one entry)
+case
+when p.prior_census is null             then 'flat'
+when l.census_current > p.prior_census  then 'growing'
+when l.census_current < p.prior_census  then 'declining'
+else                                         'flat'
+end as census_trend
+from latest l
+join buildings b on b.id = l.building_id
+left join prior p on p.building_id = l.building_id;
+QA verification
+Insert two building_metrics rows for Crossett with metric_date = '2026-03-20' (census 54) and metric_date = '2026-03-27' (census 58). Query v_latest_building_metrics WHERE short_name = 'Crossett'. Confirm census_trend = 'growing'.
+Insert a single row for Erie (no prior row). Confirm census_trend = 'flat'.
+Insert two rows for The Woods where census decreases. Confirm census_trend = 'declining'.
+Confirm the view returns exactly 7 rows — one per building — after seeding all buildings.
+2. Fix: Building scoping constraints — Migration 001 + 007 patches
+[P1] BUG: Two issues: (1) profiles.primary_building_id had no FK to buildings(id), so an invalid UUID could be assigned silently, breaking all auth_building()-based RLS checks. (2) The building_metrics UPDATE policy used only USING (which filters which rows can be seen) but not WITH CHECK (which validates the post-update state). A facility admin could update a row they own and change its building_id to another building.
+FIX: (1) FK added via ALTER TABLE. A trigger validates that primary_building_id is not null for roles that require building scope. Portfolio-wide roles (regional_operator, corporate_admin, knowledge_manager) may have null primary_building_id. (2) WITH CHECK clause added to the UPDATE policy, matching USING exactly, preventing building_id from being changed to a building the user doesn't own.
+2.1  Patch for Migration 001 — add FK and null-guard trigger
+Run after Migration 001. These two statements are additive — they do not alter existing data.
+-- Add FK: primary_building_id must reference a real building (or be null)
+alter table profiles
+add constraint profiles_primary_building_id_fkey
+foreign key (primary_building_id)
+references buildings(id)
+on delete set null;
+-- Trigger: enforce that building-scoped roles always have a building assigned
+-- Portfolio-wide roles (regional_operator, corporate_admin, knowledge_manager) may be null
+create or replace function enforce_building_scope()
+returns trigger language plpgsql as $$
+begin
+if new.role in ('mds_coordinator','don','facility_admin','billing_rcm')
+and new.primary_building_id is null then
+raise exception
+'Role % requires a primary_building_id. Assign a building before saving.',
+new.role
+using errcode = 'check_violation';
+end if;
+return new;
+end;
+$$;
+create trigger enforce_building_scope_on_profile
+before insert or update on profiles
+for each row execute procedure enforce_building_scope();
+Important: when Dov creates the first corporate_admin profile manually (his own), primary_building_id can be null — the trigger allows it because corporate_admin is a portfolio-wide role. The trigger only fires for building-scoped roles.
+2.2  Patch for Migration 007 — add WITH CHECK to building_metrics UPDATE policy
+Drop and recreate the UPDATE policy with WITH CHECK matching the USING clause.
+-- Drop the incomplete UPDATE policy from V2.1
+drop policy if exists "building_metrics: update by staff" on building_metrics;
+-- Recreate with WITH CHECK (prevents changing building_id to a different building)
+create policy "building_metrics: update by staff"
+on building_metrics
+for update
+using (
+auth_role() in ('regional_operator','corporate_admin')
+or (auth_role() = 'facility_admin' and building_id = auth_building())
+)
+with check (
+auth_role() in ('regional_operator','corporate_admin')
+or (auth_role() = 'facility_admin' and building_id = auth_building())
+);
+The WITH CHECK clause applies to the post-update row. Without it, a facility admin could in theory update a row they own and swap building_id to another building — the USING clause would allow the row to be found, but WITH CHECK would not allow it to be saved with a different building_id.
+QA verification
+Attempt to UPDATE profiles and set primary_building_id = null for a don role → trigger must raise exception 'Role don requires a primary_building_id.'
+Attempt to UPDATE profiles and set primary_building_id = null for a corporate_admin role → must succeed (portfolio-wide role).
+Attempt to UPDATE profiles with a non-existent UUID for primary_building_id → must fail with FK violation.
+Log in as facility_admin for Crossett. Attempt to UPDATE a building_metrics row for Crossett, changing building_id to Glenwood's UUID → must fail with RLS policy violation.
+Log in as facility_admin for Crossett. UPDATE a building_metrics row for Crossett without changing building_id → must succeed.
+3. Fix: Knowledge retrieval ranking — server-side SQL function
+[P2] BUG: V2.1 retrieve.js interpolated the user's query string directly into a SQL expression inside the Supabase .select() string: plainto_tsquery('english', '${query}'). This is brittle for queries containing apostrophes, quotes, or special characters, and is the wrong pattern to establish in a build spec. PostgREST may or may not sanitize the expression correctly depending on how it parses the select clause.
+FIX: Ranking moved to a server-side Postgres function (search_knowledge). retrieve.js now calls this function via supabase.rpc() — no user input ever appears in a raw SQL string on the client side. The function uses parameterized query arguments, which Postgres handles safely.
+3.1  New SQL function — add to Migration 003 or run as a patch
+-- Add to Migration 003, or run as a standalone patch after 003
+create or replace function search_knowledge(
+search_query    text,
+p_building_id   uuid    default null,
+p_state         char(2) default null,
+p_source_types  text[]  default null,
+p_limit         int     default 5
+)
+returns table (
+id               uuid,
+title            text,
+citation_text    text,
+effective_date   date,
+full_content     text,
+source_type      knowledge_source_type,
+review_due_date  date,
+storage_path     text,
+owner_name       text,
+relevance_score  float4
+)
+language sql stable security invoker as $$
+select
+ks.id,
+ks.title,
+ks.citation_text,
+ks.effective_date,
+ks.full_content,
+ks.source_type,
+ks.review_due_date,
+ks.storage_path,
+coalesce(p.full_name, 'Unassigned') as owner_name,
+ts_rank_cd(
+to_tsvector('english', coalesce(ks.title,'') || ' ' || coalesce(ks.full_content,'')),
+plainto_tsquery('english', search_query)   -- parameterized: safe
+) as relevance_score
+from knowledge_sources ks
+left join profiles p on p.id = ks.owner_id
+where
+ks.status = 'approved'
+and to_tsvector('english', coalesce(ks.title,'') || ' ' || coalesce(ks.full_content,''))
+@@ plainto_tsquery('english', search_query)
+and (p_building_id is null or ks.building_id = p_building_id or ks.building_id is null)
+and (p_state is null or ks.state = p_state or ks.state is null)
+and (p_source_types is null or ks.source_type = any(p_source_types))
+order by relevance_score desc
+limit p_limit;
+$$;
+3.2  Updated retrieve.js — calls RPC, no raw SQL string
+// lib/knowledge/retrieve.js — V2.2 (no user input in SQL strings)
+const STALE_DAYS = {
+building_profile:       14,  payer_guidance:          45,
+state_reimbursement:    90,  survey_history:          90,
+poc_template:           90,  operator_best_practice:  180,
+corporate_playbook:    180,  approved_faq:            90,
+policy:                365,  referral_intelligence:   30,
+}
+export async function retrieveKnowledge(query, opts = {}) {
+const { buildingId, state, sourceTypes, limit = 5 } = opts
+// All parameters passed as typed RPC args — no interpolation into SQL
+const { data, error } = await supabase.rpc('search_knowledge', {
+search_query:   query,
+p_building_id:  buildingId ?? null,
+p_state:        state ?? null,
+p_source_types: sourceTypes ?? null,
+p_limit:        limit,
+})
+if (error || !data) return []
+const now = Date.now()
+return data.map(src => {
+const threshold = STALE_DAYS[src.source_type] ?? 90
+const ageDays = src.review_due_date
+? Math.floor((now - new Date(src.review_due_date)) / 86400000)
+: null
+return {
+...src,
+is_stale:           ageDays !== null && ageDays > 0,
+stale_days_overdue: ageDays !== null && ageDays > 0 ? ageDays : 0,
+}
+})
+}
+QA verification
+Call retrieveKnowledge("resident's fall") — apostrophe in query. Confirm no error, results returned normally.
+Call retrieveKnowledge('"quoted phrase"') — quotes in query. Confirm no error.
+Call retrieveKnowledge('F689 plan of correction'). Confirm each result includes owner_name, review_due_date, is_stale, stale_days_overdue, and relevance_score.
+Mark one knowledge source's review_due_date to yesterday. Call retrieveKnowledge with a matching query. Confirm is_stale=true and stale_days_overdue=1 for that result.
+4. Fix: Environment file guidance
+[P2] BUG: V2.1 said '.env.local should be committed to git with the two NEXT_PUBLIC_ variables.' Committing any .env file to git is a bad habit to canonize in a build spec. Even if public keys are technically safe to expose, the pattern trains developers to commit .env files — and eventually a service role key or API key ends up committed by mistake.
+FIX: .env.local stays out of git entirely, always. An .env.example file documents which variables are needed without values. .gitignore rule is explicit. Vercel environment variable setup is the single source of truth for all deployed values.
+4.1  .gitignore — add this line
+.env*
+This excludes .env, .env.local, .env.development, .env.production, and any other .env variant from git. Next.js's default .gitignore already includes .env.local — this line makes it explicit and covers all variants.
+4.2  .env.example — commit this file to git
+Create .env.example in the project root and commit it. It documents what's needed without exposing values. New contributors (or future builders) copy this file to .env.local and fill in values.
+# .env.example — copy to .env.local and fill in values
+# NEVER commit .env.local to git
+# Supabase — from project Settings > API
+# These are NEXT_PUBLIC_ because the browser-side Supabase client needs them
+NEXT_PUBLIC_SUPABASE_URL=https://[your-project-ref].supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+# SERVER-SIDE ONLY — never add NEXT_PUBLIC_ prefix to these
+# Set in Vercel dashboard for production; set in .env.local for local dev only
+SUPABASE_SERVICE_ROLE_KEY=eyJ...
+ANTHROPIC_API_KEY=sk-ant-...
+4.3  Corrected environment variable table
+* SUPABASE_SERVICE_ROLE_KEY and ANTHROPIC_API_KEY go in .env.local for LOCAL DEVELOPMENT ONLY. They are excluded from git by .gitignore. In production, they live in Vercel dashboard only.
+QA verification
+Confirm .gitignore contains '.env*' before first commit.
+.env.example exists in repo root and is committed. .env.local is NOT committed.
+Run: git ls-files | grep .env — only .env.example should appear. If .env.local appears, the build is misconfigured.
+Deploy to Vercel. In browser DevTools → Application → no SUPABASE_SERVICE_ROLE_KEY or ANTHROPIC_API_KEY visible anywhere.
+5. Open Questions — Decisions
+5.1  Is building_metrics append-only or editable in place?
+DECISION: Append-only. Each row is a dated snapshot. To correct a metric, insert a new row for today's date — it becomes the latest. Past rows are never edited.
+The unique(building_id, metric_date) constraint already enforces this — two entries cannot exist for the same building on the same date. If a user submits corrections today, they upsert today's row:
+insert into building_metrics (building_id, metric_date, census_current, ...)
+values ($1, current_date, $2, ...)
+on conflict (building_id, metric_date)
+do update set
+census_current = excluded.census_current,
+refreshed_by   = excluded.refreshed_by,
+refreshed_at   = now();
+This means the Building Intelligence edit UI should always write today's date and use upsert, not target a specific historical row. A facility admin editing yesterday's data simply creates today's record with corrected values — yesterday's record remains in the audit history.
+5.2  Should primary_building_id be nullable only for portfolio-wide roles?
+DECISION: Yes. FK to buildings(id) enforced for all roles. Null allowed for regional_operator, corporate_admin, knowledge_manager. Null is rejected at the DB layer (not just application layer) for facility_admin, don, mds_coordinator, and billing_rcm — enforced by the trigger added in Section 2.
+This means the /settings/users role assignment screen must always require a building selection when assigning a building-scoped role. The form should disable the Save button and show an error if a building-scoped role is selected without a primary_building_id.
+The trigger fires on INSERT and UPDATE, so it catches both initial profile creation and subsequent role changes. If a corporate_admin tries to change a don's primary_building_id to null, the trigger raises an exception before the update commits.
+6. Definitive Migration Run Order — V2.2
+Run these in order in a clean database. Each block is a separate migration file. Do not skip or reorder.
+IHCM Operating Intelligence Platform — V2.2 Surgical Correction Set
+Independence Healthcare Management  |  Confidential  |  March 2026
+[TABLE]
+Sev | Finding | Where fixed | One-line summary
+P1 | census_trend always returns flat | Section 1 — Migration 002 replacement | View rewritten: trend derived before distinct on, using a CTE with row_number() to compare the two most recent rows per building.
+P1 | primary_building_id has no FK; UPDATE policy missing WITH CHECK | Section 2 — Migration 001 + 007 patches | FK added via ALTER TABLE. UPDATE policy now has WITH CHECK matching USING clause. Nullable allowed for regional/corporate only — enforced by trigger.
+P2 | Raw query string interpolated into SQL in retrieveKnowledge() | Section 3 — Postgres function + updated retrieve.js | Ranking moved to a server-side SQL function. retrieve.js calls the function via RPC — no user input in raw SQL string.
+P2 | .env.local committed to git with public vars | Section 4 — Env file guidance | .env.local stays out of git entirely. .env.example added for documentation. .gitignore rule specified.
+[TABLE]
+Open question | Decision
+Is building_metrics append-only or editable in place? | Append-only. Each metric_date is a new row. The unique(building_id, metric_date) constraint enforces this. To correct a metric, insert a new row for today's date — it becomes the latest. Editing past rows is not supported and not needed.
+Should primary_building_id be nullable only for portfolio-wide roles? | Yes. FK to buildings(id) enforced for all roles. Nullable allowed for regional_operator, corporate_admin, and knowledge_manager only — enforced by a trigger that rejects null primary_building_id for facility_admin, don, mds_coordinator, and billing_rcm.
+[TABLE]
+Variable | Browser? | Source | Vercel | .env.local
+NEXT_PUBLIC_SUPABASE_URL | YES | Supabase → Settings → API | YES | YES
+NEXT_PUBLIC_SUPABASE_ANON_KEY | YES | Supabase → Settings → API | YES | YES
+SUPABASE_SERVICE_ROLE_KEY | NO | Supabase → Settings → API | YES | YES*
+ANTHROPIC_API_KEY | NO | Same key from other IHCM projects | YES | YES*
+[TABLE]
+File | Contents | When | Notes
+001 | uuid-ossp, pgvector, user_role enum (with 'pending'), profiles table, handle_new_user() trigger, buildings table + seed, enforce_building_scope() trigger, FK on primary_building_id | Phase 0 | All V2.2 additions for onboarding and building scoping are in this file.
+002 | building_metrics table + v_latest_building_metrics view (V2.2 CTE version) | Phase 0 | Drop old view first if re-running: DROP VIEW IF EXISTS v_latest_building_metrics;
+003 | knowledge_status enum, knowledge_source_type enum, knowledge_sources table + FTS index, knowledge_versions table, search_knowledge() RPC function (V2.2 addition) | Phase 1 | RPC function added in V2.2. Include it in this file.
+004 | workflow_type enum, risk_tier enum, conversations table, messages table | Phase 1 | Unchanged from V2.1.
+005 | feedback_events, audit_events, review_queue tables | Phase 1 | Unchanged from V2.1.
+007 | Enable RLS on all tables, auth_role() and auth_building() helper functions, all RLS policies including corrected building_metrics UPDATE WITH CHECK | Phase 0 (after all tables exist) | Renumbered from V2.1. Run after 005. DROP POLICY statements included if re-running.
+006 | pgvector HNSW index on knowledge_sources.embedding | Phase 3 only | Run only when adding vector search in Phase 3. Extension is already enabled in 001.
+[COMMENTS]
+[FOOTNOTES]

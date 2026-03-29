@@ -1,0 +1,448 @@
+IHCM AI Bot Widget
+Full Project Specification & Code Blueprint
+QA Agent Review Document  |  v1.0  |  March 2026
+Independence Healthcare Management  |  Confidential  |  2026
+1. Purpose & Scope
+This document is the authoritative specification for the IHCM AI Bot Widget. It serves two purposes: (1) a build blueprint that defines every file, function, and behavior required for the application to work correctly, and (2) a QA review guide that gives an automated or human reviewer everything needed to verify the build against the specification without access to the original author.
+A QA agent using this document should be able to: open each source file, verify its content against the spec, run each numbered test case, and produce a pass/fail report. No prior context about the project is assumed.
+What the application does
+Provides a floating browser-based chat panel with 5 role-specific AI bots for IHCM's clinical and administrative team
+Each bot carries a complete IHCM-context system prompt and is accessible via a tab at the top of the interface
+A building selector dropdown injects building-specific context (census, turnaround status, payer, key relationships) into every system prompt at runtime
+A draft mode toggle changes the output format from conversational answers to formatted documents (Plans of Correction, appeal letters, care plan entries)
+Conversation history persists across browser sessions via localStorage, restoring the last 40 messages per bot automatically
+The Anthropic API key is never exposed to the browser — all API calls are proxied through a Vercel serverless function
+What the application does NOT do
+Does not connect to live PCC, billing systems, or any IHCM database — bots work from information the user provides in conversation
+Does not require user login at v1 — URL-based access shared internally
+Does not persist data to any server or database — all storage is browser-local
+Does not stream responses — full reply returned before rendering
+2. Complete File Inventory
+Every file that must exist in the deployed project. QA agent: verify each file exists at the specified path and matches its described purpose.
+2.1  Files that must NOT exist
+.env.local in the deployed Vercel build — this file is for local development only and must never be deployed
+Any file containing the string 'sk-ant-' anywhere in the /src or /public directories
+node_modules/ directory should not be committed to version control (excluded by .gitignore)
+3. Architecture & Data Flow
+3.1  Request lifecycle
+Every user message follows this exact path. QA agent: trace this flow when verifying functional tests.
+User types a message and presses Enter or clicks the send button in the browser.
+App.jsx calls sendMessage(). Appends user message to currentHistory. Sets loading=true. Renders typing indicator.
+App.jsx POSTs to /api/chat with body: { botId, buildingId, isDraft, messages } where messages is the full conversation array (role + content only, typing flags stripped).
+Vercel routes /api/chat to api/chat.js serverless function.
+api/chat.js reads ANTHROPIC_API_KEY from process.env. Looks up bot by botId in BOTS array. Looks up building by buildingId in BUILDINGS array. Assembles system prompt: bot.system + building.context (if selected) + DRAFT_SUFFIX or CHAT_SUFFIX.
+api/chat.js POSTs to https://api.anthropic.com/v1/messages with the assembled system prompt and sanitized message history.
+Anthropic returns a response. api/chat.js extracts content[0].text and returns { reply: string } to the browser.
+App.jsx receives the reply. Removes typing indicator. Appends assistant message to history. Calls saveHistory(botId, updatedHistory) to persist to localStorage. Renders the new bubble.
+3.2  Building context injection
+This is the core intelligence of the building selector feature. QA agent: verify this mechanism in api/chat.js.
+When buildingId is null or 'none': system prompt = bot.system + CHAT_SUFFIX (or DRAFT_SUFFIX)
+When buildingId is a valid building ID: system prompt = bot.system + building.context + CHAT_SUFFIX (or DRAFT_SUFFIX)
+The building.context string is injected between the base system prompt and the mode suffix
+Building context injection happens server-side in api/chat.js — never in the browser
+Each building context block starts with 'ACTIVE BUILDING CONTEXT —' so the model can clearly identify it
+3.3  Draft mode mechanics
+Draft mode changes two things: the system prompt suffix and the max_tokens limit. QA agent: verify both in api/chat.js.
+Chat mode: appends CHAT_SUFFIX ('Respond conversationally and concisely…'), max_tokens: 1000
+Draft mode: appends DRAFT_SUFFIX ('OUTPUT FORMAT — DRAFT MODE ACTIVE: respond as a structured, professional document…'), max_tokens: 2000
+Draft mode doubles the token budget because full documents (POCs, appeal letters) require more output
+In the browser, draft-mode bot messages receive class 'draft-bubble' which applies serif font, amber left border, and cream background
+Draft-mode bot messages also display a 'Copy document' button that copies the raw text to clipboard
+3.4  localStorage persistence
+Three categories of data are persisted. QA agent: verify all keys in storage.js and their restore logic in App.jsx.
+The storage.js module wraps all localStorage calls in try/catch. If localStorage throws (incognito mode, quota exceeded), it falls back to an in-memory object (inMemory). The application never crashes due to storage errors — it silently degrades to session-only memory.
+4. Component & Function Specification
+Detailed spec for every component and function in the codebase. QA agent: verify each component renders correctly and each function behaves as described.
+4.1  App.jsx — state variables
+4.2  App.jsx — key functions
+switchBot(id)
+Sets activeBotId to id
+Clears inputText
+Calls saveActiveBot(id)
+Focuses textarea after 50ms (setTimeout)
+Does NOT clear history — each bot retains its own conversation independently
+sendMessage(overrideText?)
+Reads inputText or overrideText. Returns early if empty or loading.
+Clears inputText, resets textarea height to auto
+Sets loading = true
+Creates userMsg = { role: 'user', content: text }
+Appends userMsg and a typing placeholder to currentHistory via setHistories
+Calls fetch('/api/chat', { method: 'POST', body: JSON.stringify({ botId, buildingId, isDraft, messages }) })
+messages array is currentHistory with userMsg appended, with typing objects filtered out, role+content only
+On success: removes typing placeholder, appends { role: 'assistant', content: reply, draft: isDraft }
+On error: appends { role: 'assistant', content: 'Connection error. Please try again.', draft: false }
+In both cases: calls saveHistory(activeBotId, finalHistory), sets loading = false, focuses textarea
+handleBuildingChange(e)
+Sets buildingId = e.target.value
+Calls saveBuilding(e.target.value)
+Does NOT clear history — building change takes effect on the next message sent
+handleDraftToggle()
+Toggles isDraft boolean
+Calls saveDraftMode(!isDraft)
+Empty state starters immediately update to show draftStarters when isDraft becomes true
+handleClearHistory()
+Calls window.confirm('Clear conversation history for this bot?')
+If confirmed: calls clearHistory(activeBotId), sets histories[activeBotId] = []
+Clear button only renders when displayHistory.length > 0
+4.3  MessageBubble component
+Props: msg (message object), bot (bot definition), isDraft (boolean)
+Renders user messages right-aligned with gray avatar labeled 'You'
+Renders bot messages left-aligned with colored avatar using bot.avatar initials
+Applies class 'draft-bubble' to bot messages when isDraft=true AND msg.draft=true
+Renders typing messages with class 'typing' and text 'Thinking…'
+Renders a 'Copy document' button below draft-mode bot messages. Button uses useCopy hook. Shows 'Copied!' for 2 seconds after click.
+All message content is passed through renderMarkdown() before dangerouslySetInnerHTML
+renderMarkdown(text) — inline function
+Step 1: HTML-escapes &, <, > to prevent XSS
+Step 2: Replaces **text** with <strong>text</strong>
+Step 3: Replaces *text* with <em>text</em>
+Step 4: Replaces \n with <br/>
+Returns HTML string. Never executes script. No third-party markdown library needed.
+4.4  EmptyState component
+Props: bot, isDraft, onStarter
+Shows bot avatar circle (using bot.colorBg and bot.color), bot name, bot desc
+When isDraft=true: shows amber notice 'Draft mode on — responses will be formatted documents'
+Shows 4 starter buttons from bot.starters (chat mode) or bot.draftStarters (draft mode)
+Clicking a starter calls onStarter(text) which calls sendMessage(text) directly
+4.5  api/chat.js — serverless function spec
+CORS handling
+ALLOWED_ORIGINS = ['https://ihcm-bots.vercel.app', 'http://localhost:5173', 'http://localhost:4173']
+If request origin is in ALLOWED_ORIGINS: set Access-Control-Allow-Origin header to that origin
+If request origin is NOT in the list: no CORS header set — browser blocks the request
+OPTIONS preflight: return 200 immediately with CORS headers
+Request validation
+Method must be POST. All other methods return 405.
+Body must parse to valid JSON. Invalid JSON returns 400.
+botId must be a string matching a bot in BOTS array. Unknown botId returns 400.
+messages must be an array with at least 1 element. Missing or empty returns 400.
+Last message in sanitized array must have role='user'. Violated returns 400.
+System prompt assembly — exact order
+systemPrompt = bot.system
+if (buildingId && buildingId !== 'none') {
+const building = BUILDINGS.find(b => b.id === buildingId)
+if (building && building.context) {
+systemPrompt += '\n' + building.context
+}
+}
+systemPrompt += isDraft ? DRAFT_SUFFIX : CHAT_SUFFIX
+Message sanitization
+Filter: only messages with role 'user' or 'assistant' and string content pass through
+Truncate: each message content is sliced to 8000 characters maximum
+Limit: only last 20 messages sent to API (context window management)
+Result array must end with role='user' or request is rejected
+Anthropic API call
+Model: claude-sonnet-4-20250514
+max_tokens: 1000 in chat mode, 2000 in draft mode
+system: assembled system prompt string
+messages: sanitized message array
+API key from process.env.ANTHROPIC_API_KEY — never hardcoded, never in response
+5. Bot Definitions Specification
+Each bot must have all 8 required fields. QA agent: open src/bots.js and verify each bot against this table.
+5.1  System prompt required content — QA verification checklist
+Each system prompt must contain the following phrases or concepts. QA agent: grep src/bots.js for these strings.
+All 5 bots must contain:
+'Independence Healthcare Management' — establishes IHCM company context
+'Arkansas' AND 'Ohio' AND 'Pennsylvania' — multi-state coverage
+'2026' with a revenue, census, or quality target — grounds answers in current goals
+A CORE CAPABILITIES section listing at least 5 specific capability areas
+A HOW YOU RESPOND section with explicit guidance on response style
+A KEY CONTEXT section with IHCM-specific operational facts
+A 'Things you don't do' or equivalent boundary statement
+MDS bot specifically must contain:
+'PDPM' — PDPM reimbursement model
+'Section GG' — functional scoring
+'NTA' — Non-Therapy Ancillary, flagged as most under-coded
+'ARD' — Assessment Reference Date timing guidance
+'16%' — IHCM skilled mix target
+Billing bot specifically must contain:
+All 7 CMS Provider IDs: 045350, 045437, 045403, 045176, 045190, 366335, 395042
+'CO-96' — most common denial code
+'835' — remittance advice interpretation
+'NTA scoring window' — days 1-3 rule
+Regional bot specifically must contain:
+'Crossett' labeled as turnaround with URGENCY HIGH
+'Glenwood' labeled as MODEL BUILDING
+'Dr. Tim' — key referral gap at Arkadelphia
+'$1,100' — Ohio Medicaid vent unit rate
+6. Building Definitions Specification
+All 7 buildings plus the placeholder 'none' entry. QA agent: open src/buildings.js and verify each entry against this table.
+6.1  Building context content requirements
+Each building context block (except 'none') must satisfy these requirements. QA agent: verify each context string in src/buildings.js.
+Starts with 'ACTIVE BUILDING CONTEXT —' followed by the building name, state abbreviation, and CMS Provider ID
+Contains the correct census figure matching the table above
+Contains the correct state-specific Medicaid payer (AR = Arkansas DHS LTSS, OH = Ohio Medicaid MyCare/PASSPORT, PA = Pennsylvania PROMISe)
+Crossett context specifically contains 'TURNAROUND' and 'URGENCY' and 'survey'
+Glenwood context specifically contains 'MODEL'
+Arkadelphia context specifically contains 'Dr. Tim'
+Marymount context specifically contains 'vent' and '$1,100'
+Erie context specifically contains 'Nightingale 5' and 'Michael F'
+7. UI & CSS Specification
+Visual and behavioral spec for the interface. QA agent: verify these in the browser on the live URL.
+7.1  Layout structure (top to bottom)
+Top bar (.topbar) — contains brand label 'IHCM AI', building selector, draft mode toggle, clear button (when history exists), and bot tab row
+Bot header (.bot-header) — avatar circle, bot name and description, building pill (when building selected), Draft pill (when draft mode on)
+Message area (.messages) — scrollable, contains empty state or message thread
+Input area (.input-area) — textarea, send button. Input border turns amber in draft mode.
+7.2  Bot tab behavior
+5 tabs labeled: MDS, DON, Billing, Admin, Regional
+Active tab has border-bottom in navy (#1B3A6B) and navy text. Inactive tabs have gray text.
+Switching tabs is instant — no loading state, no API call
+Each tab independently maintains its message history within the session and across sessions
+Tabs are horizontally scrollable on narrow screens (mobile)
+7.3  Building selector
+Select element with 8 options: 'Select your building…' (default) + 7 buildings
+Default state: placeholder text, default border color
+Active state (building selected): blue background (#E6F1FB), blue border (#185FA5), blue text (#0C447C)
+Selecting a building immediately shows a blue pill in the bot header with short name + state abbreviation
+Selection persists across sessions via localStorage
+Changing building does NOT clear history — takes effect on next sent message
+7.4  Draft mode toggle
+Button with a colored dot indicator + label ('Chat mode' or 'Draft mode')
+Default (chat) state: gray border, gray dot, gray text
+Active (draft) state: amber background (#FAEEDA), amber border (#854F0B), amber text (#633806), amber dot
+When draft mode is active: amber 'Draft' pill appears in bot header
+When draft mode is active: input placeholder changes to 'Ask [Bot] to draft a document…'
+When draft mode is active: send button turns amber (#854F0B) instead of bot color
+When draft mode is active: empty state shows 4 different starter questions (draftStarters)
+When draft mode is active: empty state shows amber note about document output format
+7.5  Message bubbles
+User messages: right-aligned, gray background, gray border, rounded corners (12px 2px 12px 12px)
+Bot messages: left-aligned, white background, gray border, rounded corners (2px 12px 12px 12px)
+Bot draft messages: serif font (Georgia), cream background (#FFFDF7), amber left border (3px), amber outer border
+Typing indicator: italic 'Thinking…' text, muted color
+All messages fade in with a 150ms upward animation
+Message area auto-scrolls to bottom after each new message
+7.6  Responsive behavior
+At viewport width ≤ 480px: bot description in header is hidden (display: none)
+At viewport width ≤ 480px: building selector max-width reduced to 140px
+At viewport width ≤ 480px: starters grid collapses from 2 columns to 1 column
+At viewport width ≤ 480px: message bubbles expand to 90% width maximum
+Entire app max-width: 900px, centered with left/right borders on wide screens
+8. Security Specification
+Security is non-negotiable. Three of the 47 test cases are marked BLOCKER — if any fail, deployment must halt.
+8.1  API key protection — BLOCKER
+ANTHROPIC_API_KEY must only exist in process.env on the Vercel serverless function
+The string 'sk-ant-' must not appear in any file under /src/, /public/, or /dist/
+The API key must not appear in any HTTP request headers or body visible in the browser's Network DevTools tab
+The API key must not appear in the page source, any JS bundle, or any JSON response
+Verification: open Chrome DevTools → Network → filter by 'chat' → inspect the POST request → confirm x-api-key header is NOT present in the request from the browser
+8.2  CORS restriction
+api/chat.js only sets Access-Control-Allow-Origin for origins in ALLOWED_ORIGINS
+ALLOWED_ORIGINS must contain exactly: 'https://ihcm-bots.vercel.app', 'http://localhost:5173', 'http://localhost:4173'
+A request from any other origin must not receive a CORS header and must be blocked by the browser
+Verification: open DevTools console on a different website, run fetch('https://ihcm-bots.vercel.app/api/chat', {method:'POST',...}) — must fail with CORS error
+8.3  Input sanitization
+All user-supplied content (message text) goes through HTML entity escaping in renderMarkdown() before any DOM insertion
+dangerouslySetInnerHTML is only used with the output of renderMarkdown() — which escapes &, <, > before any other processing
+XSS test: send message containing '<script>alert(1)</script>' — must render as literal text, not execute
+Message content is truncated to 8000 characters per message in api/chat.js before sending to Anthropic
+9. Complete QA Test Suite — 47 Test Cases
+All 47 tests must pass before rollout. Tests marked BLOCKER must pass or deployment halts. Tests marked Critical must pass or rollout to that user group is delayed. Run tests in order.
+Severity guide: BLOCKER = halt deployment | Critical = must pass before any rollout | High = must pass before building-level rollout | Medium = should pass, document if not | Low = nice to have
+9.1  Security tests — run first
+9.2  Core functional tests
+9.3  Building selector tests
+9.4  Draft mode tests
+9.5  localStorage memory tests
+9.6  Bot quality tests
+These test that each bot gives accurate, IHCM-specific answers. Must be evaluated by a human familiar with SNF operations or by Dov directly on Day 4.
+9.7  Deployment and performance tests
+10. Go / No-Go Gate
+The following conditions must ALL be true before the rollout message is sent to building administrators on April 8, 2026. This gate cannot be bypassed.
+If S-01, S-02, or S-03 fail — the API key is exposed. Halt deployment immediately. Do not share the URL with anyone. Fix the serverless proxy and retest before any further steps.
+11. Known Limitations at v1
+These are documented, accepted limitations at launch. They are not defects — they are Phase 2 scope items. QA agent: do not flag these as failures.
+12. Deploy Reference Card
+Complete deploy commands for Dov's Windows machine. All commands run in Command Prompt (not PowerShell).
+First deploy
+cd C:\Users\DovBraun\ihcm-bots
+npm install
+npx vercel --prod
+When prompted: set up = Y, link to existing = N, project name = ihcm-bots, directory = . (Enter), override settings = N.
+After first deploy — add API key in Vercel dashboard → Settings → Environment Variables:
+Variable name:  ANTHROPIC_API_KEY
+Value:          sk-ant-[your key from ihcm-dashboard or indhcm-academy]
+Environments:   Production, Preview, Development — all three
+Then redeploy to pick up the environment variable:
+npx vercel --prod
+Subsequent deploys (after any code change)
+cd C:\Users\DovBraun\ihcm-bots
+npx vercel --prod
+Local development
+cd C:\Users\DovBraun\ihcm-bots
+npm run dev
+Opens at http://localhost:5173. Uses proxy in vite.config.js to route /api calls to the serverless function locally. Requires .env.local with ANTHROPIC_API_KEY.
+Update a bot system prompt
+1. Open: C:\Users\DovBraun\ihcm-bots\src\bots.js
+2. Find the bot by id (mds / don / billing / admin / regional)
+3. Edit the system string
+4. Save the file
+5. Run: npx vercel --prod
+Update building context
+1. Open: C:\Users\DovBraun\ihcm-bots\src\buildings.js
+2. Find the building by id
+3. Edit the context string
+4. Run: npx vercel --prod
+IHCM AI Bot Widget — Project Specification & Code Blueprint v1.0
+Independence Healthcare Management  |  Confidential  |  March 2026
+
+[TABLE]
+Project | IHCM AI Bot Widget — 5-Bot Floating Chat Panel
+Deploy URL | https://ihcm-bots.vercel.app
+Local path | C:\Users\DovBraun\ihcm-bots\
+Tech stack | React 18 + Vite 5 · Vercel serverless (Node.js) · Anthropic Claude Sonnet API
+Deploy command | npx vercel --prod (from project root, no git required)
+Env variable | ANTHROPIC_API_KEY — set in Vercel dashboard, never in browser
+QA target | All 47 test cases pass before rollout to team on April 8, 2026
+
+[TABLE]
+File path | Purpose | Owner component | Approx lines
+index.html | HTML entry point. Loads React app via /src/main.jsx. Sets page title to 'IHCM AI Bots'. References /favicon.svg. | Static | 12
+vite.config.js | Vite build configuration. Registers React plugin. Proxies /api/* to localhost:3001 for local development only. | Build | 14
+vercel.json | Vercel routing. Rewrites /api/* to serverless functions. Rewrites all other paths to /index.html for SPA routing. | Deploy | 6
+package.json | NPM manifest. Dependencies: react, react-dom. DevDependencies: vite, @vitejs/plugin-react. Build script: vite build. | Build | 20
+public/favicon.svg | SVG favicon. Navy rectangle with white 'AI' text. Displays in browser tab. | Static | 4
+src/main.jsx | React entry point. Mounts <App /> into #root div. Imports index.css. | React | 9
+src/App.jsx | Main application component. All UI state, bot switching, message sending, building selector, draft mode toggle, localStorage restore on mount. | React | ~220
+src/bots.js | Exports BOTS array. 5 bot objects each with: id, tab, name, desc, avatar, color, colorBg, system prompt, starters[4], draftStarters[4]. | Data | ~180
+src/buildings.js | Exports BUILDINGS array. 8 entries (1 placeholder + 7 buildings). Each building has id, label, short, state, cmsId, census, context string. | Data | ~90
+src/storage.js | localStorage wrapper with in-memory fallback. Exports: loadHistory, saveHistory, clearHistory, clearAllHistory, loadBuilding, saveBuilding, loadDraftMode, saveDraftMode, loadActiveBot, saveActiveBot. | Utility | ~80
+src/index.css | All application styles. CSS custom properties, layout, top bar, bot tabs, bot header, message bubbles, draft mode styles, input area, responsive breakpoints. | Styles | ~320
+api/chat.js | Vercel serverless function. Receives POST with {botId, buildingId, isDraft, messages}. Looks up system prompt. Injects building context. Injects mode suffix. Calls Anthropic API. Returns {reply}. CORS restricted. | API | ~110
+
+[TABLE]
+localStorage key (prefixed) | What it stores | Restored on | Max size
+ihcm_bots_history_{botId} | Array of message objects {role, content, draft} for that bot. Last 40 messages. | App mount (useState initializer) | 40 messages per bot
+ihcm_bots_building | String buildingId — the last building the user selected. | App mount | Single string
+ihcm_bots_draft_mode | Boolean — whether draft mode was active in the last session. | App mount | Single boolean
+ihcm_bots_active_bot | String botId — the last bot tab the user was on. | App mount | Single string
+
+[TABLE]
+State variable | Type | Initial value | Description
+activeBotId | string | loadActiveBot() | ID of the currently visible bot tab. Drives which history, system prompt, and UI color scheme is shown.
+buildingId | string | loadBuilding() | Selected building ID or 'none'. Sent to api/chat.js for context injection. Displayed as a pill in the bot header.
+isDraft | boolean | loadDraftMode() | Whether draft mode is active. Changes input placeholder, send button color, API suffix, token limit, and bubble styling.
+histories | object | loadHistory per bot | Map of botId → message array. Each message: { role, content, draft?, typing? }. Typing flag used only for the in-flight indicator — stripped before API calls and localStorage.
+loading | boolean | false | True while waiting for API response. Disables send button, disables textarea, renders typing bubble.
+inputText | string | '' | Controlled value of the textarea. Cleared on send.
+
+[TABLE]
+id | tab | name | avatar | color | colorBg | starters | draftStarters
+mds | MDS | MDS Coordinator | MDS | #185FA5 | #E6F1FB | 4 items | 4 items
+don | DON | Director of Nursing | DON | #0F6E56 | #E1F5EE | 4 items | 4 items
+billing | Billing | Billing & RCM | RCM | #854F0B | #FAEEDA | 4 items | 4 items
+admin | Admin | Facility Administrator | ADM | #534AB7 | #EEEDFE | 4 items | 4 items
+regional | Regional | Regional Operations | REG | #993C1D | #FAECE7 | 4 items | 4 items
+
+[TABLE]
+id | label | state | cmsId | census | context required
+none | Select your building… | — | — | — | null — no context injected
+arkadelphia | Nightingale at Arkadelphia | AR | 045350 | 78/100 | Census, Dr. Tim gap, Stonegate proximity
+stonegate | Nightingale at Stonegate | AR | 045437 | 56/76 | Improving, Dr. Tim referral retention, network opp
+glenwood | Nightingale at Glenwood | AR | 045403 | 50/72 | THE MODEL BUILDING, quality protection emphasis
+thewoods | The Woods | AR | 045176 | 76/120 | Largest capacity, census upside, 44 beds below cap
+crossett | Nightingale at Crossett | AR | 045190 | 56/72 | HIGHEST PRIORITY TURNAROUND, URGENCY HIGH, survey history
+marymount | Villa at Marymount | OH | 366335 | — | Strong OH performer, vent unit opportunity, MyCare rules
+erie | Nightingale Erie | PA | 395042 | — | Nightingale 5 pilot, Michael F, PROMISe billing
+
+[TABLE]
+ID | Area | Test procedure | Pass criteria | Severity | Pass?
+S-01 | API key | Open DevTools → Network → send any message → inspect the POST /api/chat request headers | Request headers contain Content-Type only. No x-api-key, no Authorization header. | _ | BLOCKER
+S-02 | API key | View page source of live URL (Ctrl+U). Search for 'sk-ant' | String 'sk-ant' does not appear anywhere in page source. | _ | BLOCKER
+S-03 | API key | In DevTools → Sources → search all JS files for 'ANTHROPIC' | String 'ANTHROPIC' does not appear in any client-side JS bundle. | _ | BLOCKER
+S-04 | CORS | From a different domain (e.g., google.com console), run: fetch('https://ihcm-bots.vercel.app/api/chat', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}) | Fails with CORS error. No response data returned. | _ | Critical
+S-05 | XSS | Send message: <script>alert(1)</script> | Text renders literally as &lt;script&gt;alert(1)&lt;/script&gt;. No alert box. | _ | Critical
+S-06 | XSS | Send message: <img src=x onerror=alert(2)> | Text renders as literal escaped string. No alert box. No broken image. | _ | Critical
+
+[TABLE]
+ID | Area | Test procedure | Pass criteria | Severity | Pass?
+F-01 | Load | Open https://ihcm-bots.vercel.app in a fresh browser tab | Page loads. 5 bot tabs visible. MDS tab active. Empty state shown. No console errors. | _ | Critical
+F-02 | Send message | Type 'hello' in input, press Enter | Message appears as user bubble. Typing indicator appears. Bot response received within 15 seconds. Response renders as bot bubble. | _ | Critical
+F-03 | Send button | Type 'hello', click send button with mouse | Same result as F-02. Both Enter key and button click work. | _ | Critical
+F-04 | Loading state | Send a message and watch the UI during the API call | Send button is disabled (greyed). Textarea is disabled. Typing bubble is visible. These all clear when response arrives. | _ | High
+F-05 | Bot switching | Chat with MDS bot, then click DON tab | DON empty state shows. MDS conversation is preserved. DON bot has no history. | _ | Critical
+F-06 | Bot switching back | After F-05, click MDS tab again | MDS conversation from before switching is still there. | _ | Critical
+F-07 | Starters | On any empty state, click a starter question button | Question is immediately sent. Response received. No need to type. | _ | High
+F-08 | Shift+Enter | Type a message, press Shift+Enter | New line inserted in textarea. Message NOT sent. | _ | High
+F-09 | Textarea grow | Type a very long message (4+ lines) | Textarea expands up to ~100px then scrolls. Does not push the send button off screen. | _ | Medium
+F-10 | Clear button | Send at least one message. Clear button should appear. Click it. | Confirm dialog appears. On confirm, history clears. Empty state shown. Clear button disappears. | _ | High
+F-11 | Error handling | In Vercel dashboard temporarily delete the API key env var, redeploy, send a message | Friendly error message shown: 'Connection error. Please try again.' No stack trace or raw JSON error. | _ | High
+F-12 | Mobile layout | Open URL on iPhone or Android browser | All 5 tabs visible (scrollable). Input and send button accessible. Bot description hidden to save space. | _ | High
+F-13 | Chrome side panel | Open URL in Chrome, right-click tab, Move to Side Panel | Panel renders correctly at ~400px width. All tabs, input, and messages visible. | _ | High
+
+[TABLE]
+ID | Area | Test procedure | Pass criteria | Severity | Pass?
+B-01 | Default state | Load the app. Inspect building selector. | Shows 'Select your building…'. Selector has default border color (not blue). No building pill in bot header. | _ | Critical
+B-02 | Select Crossett | Select 'Nightingale at Crossett' from dropdown | Selector turns blue. Blue pill 'Crossett · AR' appears in bot header. | _ | Critical
+B-03 | Context injection | With Crossett selected, send: 'How do I grow my census?' | Response must reference turnaround urgency, 56/72 census, or survey context — not generic advice. | _ | Critical
+B-04 | Glenwood context | Select Glenwood, send: 'What should I focus on this quarter?' | Response reflects model building framing, quality protection, not turnaround language. | _ | Critical
+B-05 | History preserved | Select Crossett, send a message, then switch to Glenwood | History from Crossett-context message is preserved in that bot tab. Building change does not wipe history. | _ | High
+B-06 | Persist across reload | Select Arkadelphia, close tab, reopen URL | Building selector still shows Arkadelphia on reload. | _ | High
+B-07 | All 7 buildings | Open building selector dropdown | All 8 options visible: placeholder + Arkadelphia, Stonegate, Glenwood, The Woods, Crossett, Marymount, Erie. | _ | Critical
+B-08 | Clear selection | Select a building, then select placeholder 'Select your building…' | Building pill disappears from bot header. Selector returns to default style. | _ | High
+
+[TABLE]
+ID | Area | Test procedure | Pass criteria | Severity | Pass?
+D-01 | Default state | Load app. Inspect draft toggle. | Shows 'Chat mode'. Gray border, gray dot. No Draft pill in bot header. | _ | Critical
+D-02 | Activate draft | Click the draft mode toggle button | Button turns amber. Shows 'Draft mode'. Amber 'Draft' pill appears in bot header. Input placeholder changes. Send button turns amber. | _ | Critical
+D-03 | Draft starters | With draft mode on, navigate to DON empty state | 4 different starter questions shown (draftStarters): POC draft, staff education outline, family letter, QAPI PDSA. | _ | High
+D-04 | Draft output style | In draft mode, ask DON bot: 'Draft a Plan of Correction for F689' | Response has structured document format with section headings, numbered steps, formal language — NOT conversational prose. | _ | Critical
+D-05 | Draft bubble style | Inspect draft mode response bubble visually | Bubble has serif font (Georgia), cream background, amber left border — visually distinct from chat mode bubbles. | _ | High
+D-06 | Copy button | After receiving a draft response, click 'Copy document' | Button label changes to 'Copied!' for 2 seconds. Pasting clipboard shows the raw document text. | _ | High
+D-07 | Draft persist | Activate draft mode, close tab, reopen URL | Draft mode is still active on reload. | _ | High
+D-08 | Chat mode response | Turn draft mode OFF. Ask a clinical question. | Response is conversational, short, direct — not document-formatted. | _ | High
+
+[TABLE]
+ID | Area | Test procedure | Pass criteria | Severity | Pass?
+M-01 | History persists | Send 3 messages to MDS bot. Close browser tab entirely. Reopen URL. | All 3 messages are restored. Empty state is NOT shown. Conversation continues. | _ | Critical
+M-02 | Per-bot isolation | Send messages to MDS and to Billing bots. Close and reopen. | Each bot restores only its own history. MDS history is not in Billing and vice versa. | _ | Critical
+M-03 | Active bot restored | Switch to Regional tab. Close tab. Reopen. | Regional tab is active on reload, not MDS. | _ | High
+M-04 | 40 message limit | Send 45 messages to one bot (or manually set localStorage to an array of 45) | Only the most recent 40 messages are stored and restored. Oldest 5 are dropped. | _ | Medium
+M-05 | Incognito mode | Open URL in an incognito / private browsing window. Send messages. | App works normally. History is in-memory only (lost on tab close). No console errors or crashes. | _ | High
+M-06 | Clear persists | Send messages, click Clear. Close tab. Reopen. | History does not return. Empty state shown on reload. | _ | High
+
+[TABLE]
+ID | Bot | Test question | Pass criteria | Severity | Pass?
+Q-01 | MDS | UTI on admission day 2 — does it count for NTA scoring? | Correctly explains NTA window: comorbidity must be present on days 1-3. UTI on day 2 = yes, qualifies. Do not accept a generic non-answer. | _ | Critical
+Q-02 | MDS | How do I code Section GG 'eating' for hand-over-hand assist? | References assistance level 3 (Moderate assistance) or equivalent. Recommends POC documentation alignment. | _ | Critical
+Q-03 | MDS + Building | With Crossett selected: how do I protect skilled days on a short stay? | Answer references turnaround urgency AND skilled mix target. Not generic. | _ | Critical
+Q-04 | DON | We got cited for F689. What should our 48-hour POC look like? | Cites F689 tag number. Gives specific POC elements: immediate safety measures, root cause analysis, care plan revision, staff education. | _ | Critical
+Q-05 | DON (Draft) | With draft mode on: Draft a Plan of Correction for F689 falls citation | Output is a structured document, not a chat reply. Has numbered sections, formal language, begins with citation statement. | _ | Critical
+Q-06 | Billing | Medicare denied CO-96 on a Part A claim. Most likely cause? | Correctly identifies CO-96 as non-covered. Names top causes: benefit days exhausted, level of care not met, no qualifying hospital stay. | _ | Critical
+Q-07 | Billing | MA plan cut auth on day 10 of a 21-day stay. What do we do? | Gives specific steps: immediate expedited appeal, patient notification rights (NOMNC), ALJ process. Mentions plan-specific contract rules. | _ | Critical
+Q-08 | Admin | My census is 52 and I need to hit 60 in 60 days. What is the play? | Gives a specific tactical plan with referral source actions, discharge planner outreach. Not generic marketing advice. | _ | Critical
+Q-09 | Regional | Compare Crossett and Glenwood and tell me where to focus first. | References correct census figures (56/72 vs 50/72). Names Crossett as turnaround priority. Does not mix up the buildings. | _ | Critical
+Q-10 | Regional (Draft) | With draft mode on: Draft a board memo on the Ohio vent unit opportunity | Output is a formatted memo. References ~$1,100/day Ohio Medicaid rate. Has structured sections (Opportunity, Clinical Requirements, Financial Model, Recommendation). | _ | High
+
+[TABLE]
+ID | Area | Test procedure | Pass criteria | Severity | Pass?
+P-01 | First load speed | Open URL on a 4G mobile connection (or throttle DevTools to Fast 4G) | Page is fully interactive within 5 seconds. | _ | High
+P-02 | Response time | Send a chat-mode message and time the response | Response arrives within 10 seconds for standard questions. | _ | High
+P-03 | Draft response time | Send a draft-mode message requesting a full POC document | Response arrives within 20 seconds (larger token budget). | _ | Medium
+P-04 | Fresh device | Open URL on a device that has never visited the site | Loads correctly, all 5 bots visible, MDS empty state shown, no errors. | _ | Critical
+P-05 | Vercel function logs | Open Vercel dashboard → Functions → view logs after sending messages | Log entries appear for each message. No unhandled errors. No API key values in log output. | _ | High
+
+[TABLE]
+Condition | Required result | Verified by
+S-01, S-02, S-03 — all three API key security tests | MUST PASS | Dov — Day 3
+S-04, S-05, S-06 — CORS and XSS tests | MUST PASS | Dov — Day 3
+F-01 through F-13 — all functional tests | All 13 pass | Dov — Day 4
+B-01 through B-08 — all building selector tests | All 8 pass | Dov — Day 4
+D-01 through D-08 — all draft mode tests | All 8 pass | Dov — Day 4
+M-01 through M-06 — all localStorage tests | All 6 pass | Dov — Day 4
+Q-01 through Q-10 — all bot quality tests | Q-01–Q-09 pass | Dov — Day 4/5
+P-01 through P-05 — deployment and performance tests | All 5 pass | Dov — Day 3
+3-person pilot (MDS coordinator, Eli, Azra) all confirm 4 acceptance criteria | 3 of 3 confirm | Dov — Day 5
+
+[TABLE]
+Limitation | Behavior at v1 | Phase 2 fix
+No authentication | URL is accessible to anyone who has it. Shared internally by Dov. | PIN or email-link auth via Vercel middleware
+No live data connection | Bots work from information users type. No PCC, Stampli, or billing system feed. | PCC CSV upload pipeline (Phase 2 spec ready)
+History lost on clear or manual localStorage wipe | Clearing browser data removes all history. This is expected behavior. | Supabase-backed server history (Phase 3)
+No guided intake forms | Users must provide context in their question. Vague questions get general answers. | Per-bot structured intake forms (Phase 2)
+No feedback / quality tracking | No thumbs up/down. No usage analytics at v1. | Thumbs up/down → Supabase table (Phase 2)
+No streaming responses | Full response appears at once after API call completes. No token-by-token streaming. | Vercel streaming response (Phase 2)
+
+[COMMENTS]
+
+[FOOTNOTES]

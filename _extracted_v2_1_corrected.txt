@@ -1,0 +1,670 @@
+IHCM Operating Intelligence Platform
+V2.1 — QA-Corrected Build Specification
+Incorporates all 7 findings from QA agent review of V2.0  |  March 2026
+Independence Healthcare Management  |  Confidential  |  2026
+1. What Changed from V2.0
+This document is a surgical correction of V2.0. Product direction, architecture decisions, workflow specs, and build sequence are unchanged. Only the seven QA findings are addressed. Every changed section is marked with a FIX callout so a builder can identify exactly what moved.
+Sections that are identical to V2.0 and do not need re-reading: Section 7 (Workflow Specs), Section 8 (UI Screens), Section 10 (QA Requirements), Section 12 (Metrics).
+Sections with material changes: Section 2 (middleware — P0 fix), Section 3 (all migrations — P0+P1 fixes), Section 4 (onboarding flow added — P1 fix), Section 6 (retrieval function — P2 fix), Section 9 (Phase 0 env var names — P2 fix), Section 11 (env var table corrected — P2 fix).
+2. Auth and Middleware — Corrected
+BUG: V2.0 middleware matcher was '/(platform)/:path*'. Next.js route-group names like (platform) are NOT part of the URL. The matcher would never fire. /dashboard, /ask, etc. would be unprotected.
+FIX: Matcher now lists each top-level route explicitly. Role is read from profiles and injected into request headers so API routes can check it without an extra DB call.
+2.1  Corrected middleware.js
+// middleware.js — CORRECTED V2.1
+import { createMiddlewareClient } from '@supabase/auth-helpers-nextjs'
+import { NextResponse } from 'next/server'
+const PROTECTED_ROUTES = [
+'/dashboard', '/ask', '/workflows',
+'/building',  '/knowledge', '/settings'
+]
+export async function middleware(req) {
+const { pathname } = req.nextUrl
+const isProtected = PROTECTED_ROUTES.some(r => pathname.startsWith(r))
+if (!isProtected) return NextResponse.next()
+const res = NextResponse.next()
+const supabase = createMiddlewareClient({ req, res })
+const { data: { session } } = await supabase.auth.getSession()
+if (!session) {
+return NextResponse.redirect(new URL('/login', req.url))
+}
+// Fetch role and inject into header for API routes
+const { data: profile } = await supabase
+.from('profiles')
+.select('role, primary_building_id')
+.eq('id', session.user.id)
+.single()
+if (!profile || profile.role === 'pending') {
+return NextResponse.redirect(new URL('/pending', req.url))
+}
+const requestHeaders = new Headers(req.headers)
+requestHeaders.set('x-user-role', profile.role)
+requestHeaders.set('x-user-id', session.user.id)
+requestHeaders.set('x-building-id', profile.primary_building_id || '')
+return NextResponse.next({ request: { headers: requestHeaders } })
+}
+export const config = {
+matcher: [
+'/dashboard/:path*',
+'/ask/:path*',
+'/workflows/:path*',
+'/building/:path*',
+'/knowledge/:path*',
+'/settings/:path*',
+'/api/chat/:path*',
+'/api/workflow/:path*',
+'/api/knowledge/:path*',
+'/api/feedback/:path*',
+]
+}
+2.2  Route structure (corrected — no /platform/ prefix in URLs)
+app/
+├── (auth)/                  ← unauthenticated routes (no middleware)
+│   ├── login/page.jsx
+│   ├── callback/route.js
+│   └── pending/page.jsx    ← shown to role='pending' users
+├── dashboard/page.jsx       ← protected by middleware (URL: /dashboard)
+├── ask/page.jsx             ← protected (URL: /ask)
+├── workflows/               ← protected (URL: /workflows/*)
+│   ├── page.jsx             ← launcher
+│   ├── poc/page.jsx
+│   ├── appeal/page.jsx
+│   ├── census/page.jsx
+│   └── compare/page.jsx
+├── building/[id]/page.jsx   ← protected (URL: /building/:id)
+├── knowledge/page.jsx       ← protected, role-gated inside (URL: /knowledge)
+└── settings/page.jsx        ← protected (URL: /settings)
+2.3  API route role check pattern
+API routes read role from the injected header (set by middleware) instead of making a separate DB call on every request.
+// app/api/chat/route.js — role check pattern
+export async function POST(req) {
+const userRole = req.headers.get('x-user-role')
+const userId   = req.headers.get('x-user-id')
+const buildingId = req.headers.get('x-building-id')
+if (!userRole || !userId) {
+return Response.json({ error: 'Unauthorized' }, { status: 401 })
+}
+// ... rest of handler
+}
+3. Data Model — Corrected SQL Migrations
+BUG: V2.0 had three SQL-level bugs: (1) Migration 006 ran after 001 but referenced tables from 002-005. (2) vector(1536) in Migration 003 required pgvector which wasn't enabled. (3) v_latest_building_metrics view selected only building_metrics.* so getBuildingContext() fields name/cms_provider_id/state/strategic_priority/census_trend were all NULL at runtime.
+FIX: Migrations renumbered 001-007. pgvector enabled in Migration 001 (harmless early — extension is no-op until used). RLS moved to Migration 007 (after all tables exist). v_latest_building_metrics rewritten to JOIN buildings and derive census_trend. Supabase trigger for profile auto-creation added to Migration 001. RLS policies completely rewritten to fix regional read access, missing UPDATE policy, and facility admin scoping.
+Migration 001 — Extensions, identity, buildings, onboarding trigger
+-- MIGRATION 001 (run first)
+-- Extensions (pgvector harmless here; no-op until used in Migration 005)
+create extension if not exists "uuid-ossp";
+create extension if not exists vector;
+-- Role enum — includes 'pending' for new unverified users
+create type user_role as enum (
+'pending',
+'mds_coordinator', 'don', 'facility_admin',
+'billing_rcm', 'regional_operator',
+'corporate_admin', 'knowledge_manager'
+);
+-- Profiles
+create table profiles (
+id                 uuid primary key references auth.users(id) on delete cascade,
+full_name          text not null default 'New User',
+role               user_role not null default 'pending',
+primary_building_id uuid,
+created_at         timestamptz default now(),
+last_active_at     timestamptz
+);
+-- AUTO-CREATE PROFILE ON FIRST LOGIN (fixes P1: user onboarding gap)
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+insert into public.profiles (id, full_name, role)
+values (
+new.id,
+coalesce(new.raw_user_meta_data->>'full_name', new.email, 'New User'),
+'pending'
+)
+on conflict (id) do nothing;
+return new;
+end;
+$$;
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute procedure public.handle_new_user();
+-- Buildings
+create table buildings (
+id               uuid primary key default uuid_generate_v4(),
+name             text not null,
+short_name       text not null,
+cms_provider_id  text unique not null,
+state            char(2) not null,
+market           text,
+licensed_beds    integer,
+status           text default 'active',
+strategic_priority text,
+created_at       timestamptz default now()
+);
+insert into buildings (name,short_name,cms_provider_id,state,market,licensed_beds,status,strategic_priority) values
+('Nightingale at Arkadelphia','Arkadelphia','045350','AR','Arkansas',100,'active','growth'),
+('Nightingale at Stonegate','Stonegate','045437','AR','Arkansas',76,'active','improving'),
+('Nightingale at Glenwood','Glenwood','045403','AR','Arkansas',72,'active','model'),
+('The Woods','The Woods','045176','AR','Arkansas',120,'active','census_upside'),
+('Nightingale at Crossett','Crossett','045190','AR','Arkansas',72,'active','turnaround'),
+('Villa at Marymount','Marymount','366335','OH','Ohio',null,'active','strong_performer'),
+('Nightingale Erie','Erie','395042','PA','Pennsylvania',null,'active','pilot');
+Migration 002 — Building metrics
+-- MIGRATION 002
+create table building_metrics (
+id                       uuid primary key default uuid_generate_v4(),
+building_id              uuid not null references buildings(id),
+metric_date              date not null default current_date,
+census_current           integer,
+census_licensed          integer,
+census_target            integer,
+skilled_mix_pct          numeric(5,2),
+skilled_mix_target       numeric(5,2),
+medicare_pct             numeric(5,2),
+medicaid_pct             numeric(5,2),
+managed_care_pct         numeric(5,2),
+private_pct              numeric(5,2),
+ot_pct                   numeric(5,2),
+ot_target                numeric(5,2),
+ebitdar_ytd              numeric(12,2),
+ebitdar_budget           numeric(12,2),
+open_positions           text[],
+top_diagnoses            text[],
+top_referral_sources     jsonb,
+census_q2_target         integer,
+census_obstacle          text,
+last_survey_date         date,
+open_ftags               text[],
+red_qms                  text[],
+administrator_name       text,
+administrator_tenure_months integer,
+don_name                 text,
+don_tenure_months        integer,
+top_worries              text[],
+recent_history           text,
+refreshed_by             uuid references profiles(id),
+refreshed_at             timestamptz default now(),
+confidence               text default 'low',
+unique(building_id, metric_date)
+);
+-- CORRECTED VIEW: JOINs buildings to expose name/cms/state/strategic_priority
+-- Also derives census_trend from last two metric rows
+create view v_latest_building_metrics as
+select
+bm.*,
+b.name,
+b.short_name,
+b.cms_provider_id,
+b.state,
+b.market,
+b.strategic_priority,
+-- derive census_trend by comparing current row to prior row
+case
+when bm.census_current > lag(bm.census_current) over (
+partition by bm.building_id order by bm.metric_date) then 'growing'
+when bm.census_current < lag(bm.census_current) over (
+partition by bm.building_id order by bm.metric_date) then 'declining'
+else 'flat'
+end as census_trend
+from (
+select distinct on (building_id) *
+from building_metrics
+order by building_id, metric_date desc
+) bm
+join buildings b on b.id = bm.building_id;
+Migration 003 — Knowledge base
+-- MIGRATION 003 (pgvector already enabled in 001 -- safe to use here)
+create type knowledge_status as enum ('draft','approved','archived');
+create type knowledge_source_type as enum (
+'corporate_playbook','building_profile','state_reimbursement',
+'payer_guidance','survey_history','poc_template',
+'referral_intelligence','operator_best_practice','approved_faq','policy'
+);
+create table knowledge_sources (
+id               uuid primary key default uuid_generate_v4(),
+title            text not null,
+source_type      knowledge_source_type not null,
+owner_id         uuid references profiles(id),
+approver_id      uuid references profiles(id),
+effective_date   date,
+review_due_date  date,
+building_id      uuid references buildings(id),
+region           text,
+state            char(2),
+tags             text[],
+status           knowledge_status default 'draft',
+citation_text    text,
+full_content     text,
+version          integer default 1,
+embedding        vector(1536),   -- pgvector enabled in Migration 001
+storage_path     text,
+created_at       timestamptz default now(),
+updated_at       timestamptz default now()
+);
+create index knowledge_fts on knowledge_sources
+using gin(to_tsvector('english', coalesce(title,'') || ' ' || coalesce(full_content,'')));
+create table knowledge_versions (
+id           uuid primary key default uuid_generate_v4(),
+source_id    uuid not null references knowledge_sources(id),
+version      integer not null,
+full_content text,
+changed_by   uuid references profiles(id),
+changed_at   timestamptz default now(),
+change_note  text
+);
+Migration 004 — Conversations and messages
+-- MIGRATION 004
+create type workflow_type as enum (
+'ask','poc_draft','appeal_draft','census_plan',
+'building_comparison','referral_plan','survey_prep'
+);
+create type risk_tier as enum ('t1','t2','t3','t4');
+create table conversations (
+id                 uuid primary key default uuid_generate_v4(),
+user_id            uuid not null references profiles(id),
+building_id        uuid references buildings(id),
+workflow_type      workflow_type default 'ask',
+risk_tier          risk_tier default 't1',
+title              text,
+is_draft_workflow  boolean default false,
+intake_data        jsonb,
+status             text default 'active',
+created_at         timestamptz default now(),
+updated_at         timestamptz default now()
+);
+create table messages (
+id                 uuid primary key default uuid_generate_v4(),
+conversation_id    uuid not null references conversations(id) on delete cascade,
+role               text not null check (role in ('user','assistant','system')),
+content            text not null,
+sources_used       uuid[],
+assumptions        text[],
+risk_tier          risk_tier,
+model_version      text,
+is_draft           boolean default false,
+draft_edited       boolean default false,
+draft_exported     boolean default false,
+created_at         timestamptz default now()
+);
+Migration 005 — Feedback, audit, review queue
+-- MIGRATION 005
+create table feedback_events (
+id          uuid primary key default uuid_generate_v4(),
+message_id  uuid not null references messages(id),
+user_id     uuid not null references profiles(id),
+rating      text check (rating in ('useful','not_useful','correct','questionable','saved')),
+note        text,
+created_at  timestamptz default now()
+);
+create table audit_events (
+id               uuid primary key default uuid_generate_v4(),
+user_id          uuid references profiles(id),
+role             user_role,
+event_type       text not null,
+building_id      uuid references buildings(id),
+conversation_id  uuid references conversations(id),
+message_id       uuid references messages(id),
+workflow_type    workflow_type,
+risk_tier        risk_tier,
+sources_retrieved uuid[],
+model_version    text,
+metadata         jsonb,
+created_at       timestamptz default now()
+);
+create table review_queue (
+id                   uuid primary key default uuid_generate_v4(),
+message_id           uuid references messages(id),
+queue_reason         text not null,
+status               text default 'pending' check (status in ('pending','approved','rejected','promoted')),
+reviewer_id          uuid references profiles(id),
+promoted_source_id   uuid references knowledge_sources(id),
+review_note          text,
+created_at           timestamptz default now(),
+reviewed_at          timestamptz
+);
+Migration 006 — pgvector index (separate from schema)
+-- MIGRATION 006 (optional at Phase 3 — extension already enabled, just adds HNSW index)
+create index on knowledge_sources using hnsw (embedding vector_cosine_ops);
+Migration 007 — RLS policies (CORRECTED — all tables now exist)
+BUG: V2.0 RLS had 4 bugs: (1) messages policy blocked regional/corporate from reading other users' threads. (2) No UPDATE policy on building_metrics. (3) All users could read all building metrics — should be scoped to own building for facility_admin. (4) No helper function to check role, causing verbose repeated subqueries.
+FIX: Helper function added. Messages policy corrected for regional/corporate read. UPDATE policy added for building_metrics. building_metrics read scoped by role. All policies rewritten cleanly.
+-- MIGRATION 007 — CORRECTED RLS
+-- Enable RLS
+alter table profiles enable row level security;
+alter table buildings enable row level security;
+alter table building_metrics enable row level security;
+alter table knowledge_sources enable row level security;
+alter table knowledge_versions enable row level security;
+alter table conversations enable row level security;
+alter table messages enable row level security;
+alter table feedback_events enable row level security;
+alter table audit_events enable row level security;
+alter table review_queue enable row level security;
+-- Helper: get current user's role (avoids repeated subqueries)
+create or replace function auth_role()
+returns user_role language sql security definer stable as $$
+select role from profiles where id = auth.uid()
+$$;
+-- Helper: get current user's primary building
+create or replace function auth_building()
+returns uuid language sql security definer stable as $$
+select primary_building_id from profiles where id = auth.uid()
+$$;
+-- PROFILES
+create policy "profiles: own row"
+on profiles for all using (id = auth.uid());
+create policy "profiles: admin read all"
+on profiles for select
+using (auth_role() in ('corporate_admin','knowledge_manager','regional_operator'));
+-- BUILDINGS (all authenticated users can read building list)
+create policy "buildings: authenticated read"
+on buildings for select using (auth.uid() is not null);
+-- BUILDING METRICS
+-- facility_admin: own building only
+-- regional/corporate: all buildings
+create policy "building_metrics: facility admin read own"
+on building_metrics for select
+using (
+auth_role() in ('regional_operator','corporate_admin','knowledge_manager')
+or (auth_role() in ('mds_coordinator','don','facility_admin','billing_rcm')
+and building_id = auth_building())
+);
+create policy "building_metrics: insert by staff"
+on building_metrics for insert
+with check (
+auth_role() in ('regional_operator','corporate_admin')
+or (auth_role() = 'facility_admin' and building_id = auth_building())
+);
+-- UPDATE policy (was missing in V2.0)
+create policy "building_metrics: update by staff"
+on building_metrics for update
+using (
+auth_role() in ('regional_operator','corporate_admin')
+or (auth_role() = 'facility_admin' and building_id = auth_building())
+);
+-- CONVERSATIONS
+create policy "conversations: own"
+on conversations for all using (user_id = auth.uid());
+-- Regional/corporate can READ all conversations (not write)
+create policy "conversations: regional read all"
+on conversations for select
+using (auth_role() in ('regional_operator','corporate_admin'));
+-- MESSAGES — CORRECTED: regional/corporate can read via conversation access
+create policy "messages: own conversation"
+on messages for all
+using (conversation_id in (
+select id from conversations where user_id = auth.uid()
+));
+-- Regional/corporate read access to all messages
+create policy "messages: regional read all"
+on messages for select
+using (auth_role() in ('regional_operator','corporate_admin'));
+-- KNOWLEDGE SOURCES
+create policy "knowledge: approved public read"
+on knowledge_sources for select
+using (status = 'approved' and auth.uid() is not null);
+create policy "knowledge: managers all"
+on knowledge_sources for all
+using (auth_role() in ('knowledge_manager','corporate_admin'));
+-- FEEDBACK
+create policy "feedback: own"
+on feedback_events for all using (user_id = auth.uid());
+create policy "feedback: managers read all"
+on feedback_events for select
+using (auth_role() in ('knowledge_manager','corporate_admin','regional_operator'));
+-- AUDIT EVENTS (insert by service role only; read by admins)
+create policy "audit: admin read"
+on audit_events for select
+using (auth_role() in ('corporate_admin','knowledge_manager'));
+-- REVIEW QUEUE
+create policy "review_queue: managers only"
+on review_queue for all
+using (auth_role() in ('knowledge_manager','corporate_admin'));
+4. User Onboarding Flow — New in V2.1
+BUG: V2.0 only described manually creating Dov's account. Real users would authenticate successfully via magic link, trigger the profiles row creation (now fixed in Migration 001), but land with role='pending' and no building assignment. No screen or flow existed for this state.
+FIX: Trigger auto-creates profile with role='pending'. Pending users see /pending screen. corporate_admin upgrades role and assigns building via /settings/users. User gets email notification and can then access the platform.
+4.1  First-login flow
+User receives magic link email → clicks link → Supabase Auth callback at /callback/route.js
+Supabase trigger fires automatically → inserts profiles row with role='pending'
+Middleware checks profile.role === 'pending' → redirects to /pending
+/pending page shows: 'Your account has been created. An administrator will activate your access within one business day. Contact Dov Braun if urgent.'
+corporate_admin receives notification (email via Supabase webhook or daily pending-users digest)
+corporate_admin opens /settings/users → sees pending users table → sets role + primary_building_id → saves
+User receives activation email → next login lands on /dashboard
+4.2  /settings/users screen (corporate_admin only)
+Table: all profiles with role, building, last_active_at
+Filter: 'Pending only' toggle
+Inline edit: role dropdown + building selector per row
+Save writes UPDATE to profiles via service role API call (not subject to RLS — admin action)
+4.3  Role assignment — who gets what at launch
+5. RBAC Permissions (unchanged from V2.0)
+This section is identical to V2.0 Section 4. Included here for completeness so this document is self-contained.
+5.1  ROLE_PERMISSIONS map
+// lib/rbac/check.js
+export const ROLE_PERMISSIONS = {
+poc_workflow:     ['don','facility_admin','regional_operator','corporate_admin'],
+appeal_workflow:  ['billing_rcm','regional_operator','corporate_admin'],
+census_workflow:  ['facility_admin','regional_operator','corporate_admin'],
+compare_workflow: ['regional_operator','corporate_admin'],
+knowledge_admin:  ['knowledge_manager','corporate_admin'],
+audit_logs:       ['corporate_admin'],
+update_metrics:   ['facility_admin','regional_operator','corporate_admin'],
+user_management:  ['corporate_admin'],
+}
+export function canAccess(userRole, capability) {
+return (ROLE_PERMISSIONS[capability] || []).includes(userRole)
+}
+6. Knowledge Architecture — Corrected
+BUG: V2.0 retrieveKnowledge() selected only id, title, citation_text, effective_date, full_content, source_type. The Ask Workspace and QA tests required owner name, review_due_date, staleness signal, and relevance score — none of which the function returned.
+FIX: SELECT expanded to include owner profile, review_due_date, and is_stale computed field. Staleness thresholds applied per source_type. Relevance score surfaced from Postgres text-search rank.
+6.1  Corrected getBuildingContext()
+Now reads from v_latest_building_metrics which JOINs buildings — name, cms_provider_id, state, strategic_priority, and census_trend are all available.
+// lib/knowledge/buildingContext.js — CORRECTED V2.1
+export async function getBuildingContext(buildingId, userRole) {
+const { data: m, error } = await supabase
+.from('v_latest_building_metrics')  // now JOINs buildings
+.select('*')
+.eq('building_id', buildingId)
+.single()
+if (!m) return null
+const ageDays = Math.floor((Date.now() - new Date(m.refreshed_at)) / 86400000)
+const stale = ageDays > 14 ? ` [DATA ${ageDays} DAYS OLD — may be stale]` : ''
+// m.name, m.cms_provider_id, m.state, m.strategic_priority, m.census_trend
+// all now available from the corrected view JOIN
+const base = [
+`Building: ${m.name} (CMS ${m.cms_provider_id}, ${m.state})`,
+`Census: ${m.census_current}/${m.census_licensed ?? m.census_target}. Trend: ${m.census_trend ?? 'unknown'}.${stale}`,
+`Strategic priority: ${m.strategic_priority ?? 'not set'}.`,
+].join(' ')
+const roleSlice = {
+mds_coordinator:
+`Skilled mix: ${m.skilled_mix_pct ?? '?'}% (target ${m.skilled_mix_target ?? '?'}%). ` +
+`Top diagnoses: ${(m.top_diagnoses ?? []).join(', ') || 'not recorded'}. ` +
+`Medicare pct: ${m.medicare_pct ?? '?'}%.`,
+don:
+`Last survey: ${m.last_survey_date ?? 'not recorded'}. ` +
+`Open F-tags: ${(m.open_ftags ?? []).join(', ') || 'none'}. ` +
+`Red QMs: ${(m.red_qms ?? []).join(', ') || 'none'}. ` +
+`OT: ${m.ot_pct ?? '?'}% (target ${m.ot_target ?? '?'}%).`,
+facility_admin:
+`Census target Q2: ${m.census_q2_target ?? 'not set'}. ` +
+`Obstacle: ${m.census_obstacle ?? 'not recorded'}. ` +
+`Top referral sources: ${JSON.stringify(m.top_referral_sources ?? {})}. ` +
+`EBITDAR YTD: ${m.ebitdar_ytd ?? '?'} vs budget ${m.ebitdar_budget ?? '?'}.`,
+regional_operator:
+`Admin: ${m.administrator_name ?? '?'} (${m.administrator_tenure_months ?? '?'} months). ` +
+`DON: ${m.don_name ?? '?'} (${m.don_tenure_months ?? '?'} months). ` +
+`Top worries: ${(m.top_worries ?? []).join('; ') || 'not recorded'}. ` +
+`Recent history: ${m.recent_history ?? 'not recorded'}.`,
+}
+return base + '\n' + (roleSlice[userRole] ?? '')
+}
+6.2  Corrected retrieveKnowledge()
+// lib/knowledge/retrieve.js — CORRECTED V2.1
+// Staleness thresholds in days by source_type
+const STALE_DAYS = {
+building_profile:        14,
+payer_guidance:          45,
+state_reimbursement:     90,
+survey_history:          90,
+poc_template:            90,
+operator_best_practice:  180,
+corporate_playbook:      180,
+approved_faq:            90,
+policy:                  365,
+referral_intelligence:   30,
+}
+export async function retrieveKnowledge(query, opts = {}) {
+const { buildingId, state, sourceTypes, limit = 5 } = opts
+let q = supabase
+.from('knowledge_sources')
+.select(`
+id, title, citation_text, effective_date, full_content,
+source_type, review_due_date, status, storage_path,
+owner:owner_id ( full_name ),
+ts_rank_cd(to_tsvector('english', coalesce(title,'') || ' ' || coalesce(full_content,'')),
+plainto_tsquery('english', '${query}')) as relevance_score
+`)
+.eq('status', 'approved')
+.textSearch('full_content', query, { type: 'websearch' })
+.order('relevance_score', { ascending: false })
+.limit(limit)
+if (buildingId) q = q.or(`building_id.eq.${buildingId},building_id.is.null`)
+if (state)      q = q.or(`state.eq.${state},state.is.null`)
+if (sourceTypes) q = q.in('source_type', sourceTypes)
+const { data } = await q
+if (!data) return []
+const now = Date.now()
+return data.map(src => {
+const threshold = STALE_DAYS[src.source_type] ?? 90
+const ageDays = src.review_due_date
+? Math.floor((now - new Date(src.review_due_date)) / 86400000)
+: null
+return {
+...src,
+owner_name: src.owner?.full_name ?? 'Unassigned',
+is_stale: ageDays !== null && ageDays > 0,
+stale_days_overdue: ageDays !== null && ageDays > 0 ? ageDays : 0,
+}
+})
+}
+7. Build Sequence — Corrected
+BUG: V2.0 Phase 0 said to set SUPABASE_URL and SUPABASE_ANON_KEY, but the variable table required NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY. Builder following Phase 0 literally would misconfigure the frontend. V2.0 also said to run Migration 006 right after 001.
+FIX: All env var references now use NEXT_PUBLIC_ prefix consistently. Migration order is now 001 → 002 → 003 → 004 → 005 → 007 (006 is optional Phase 3 vector index). Phase 0 also adds the pending user screen and role assignment UI.
+Phase 0 — Foundation (Days 1–3)
+Exit criteria: Authenticated user can log in, see their role, and select a building. Pending users see the pending screen and cannot access protected routes.
+npx create-next-app@latest ihcm-platform --typescript --app
+npm install @supabase/supabase-js @supabase/auth-helpers-nextjs
+Create new Supabase project (separate from Executive Academy)
+Run migrations in this order: 001 → 002 → 003 → 004 → 005 → 007. Do NOT run 006 yet.
+Create .env.local with the correct variable names:
+NEXT_PUBLIC_SUPABASE_URL=https://[project-ref].supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+SUPABASE_SERVICE_ROLE_KEY=eyJ...   # server-side only — never NEXT_PUBLIC_
+ANTHROPIC_API_KEY=sk-ant-...       # server-side only — never NEXT_PUBLIC_
+Build app/(auth)/login/page.jsx — magic link form
+Build app/(auth)/callback/route.js — Supabase auth callback handler
+Build app/(auth)/pending/page.jsx — 'Account pending activation' screen
+Build middleware.js using the corrected matcher from Section 2
+Build platform shell layout with sidebar nav
+Build /settings/users page (corporate_admin only) for role assignment
+In Supabase Auth dashboard: manually create Dov's account. In SQL Editor: UPDATE profiles SET role='corporate_admin' WHERE id='[dov-uuid]';
+Deploy to Vercel. Set ALL FOUR env vars in Vercel dashboard (NEXT_PUBLIC_ names for the two Supabase public vars):
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY
+SUPABASE_SERVICE_ROLE_KEY
+ANTHROPIC_API_KEY
+Test: create a test user via magic link → confirm they see /pending screen → Dov upgrades role in /settings/users → test user can now access /dashboard
+Phase 1 — Trustworthy Ask Workspace (Days 4–10)
+Exit criteria: Authenticated user can ask a question and get a cited, building-aware answer stored server-side with full audit trail.
+Build lib/knowledge/buildingContext.js using corrected function from Section 6
+Build lib/knowledge/retrieve.js using corrected function from Section 6
+Build lib/ai/classify.js — T1-T4 tier classification by keyword matching
+Build lib/ai/prompts.js — role system prompts + context injector
+Build app/api/chat/route.js — reads role from x-user-role header (set by middleware)
+Build Ask Workspace UI — thread, input, source drawer with owner/date/stale warning
+Build feedback buttons → POST /api/feedback
+Build Building Intelligence view (read-only) from v_latest_building_metrics
+Populate first knowledge sources in Supabase dashboard
+Run Phase 1 QA: auth bypass, role restriction, API key visibility, source citations on T3
+Phase 2 — Structured Workflows (Days 11–20)
+Exit criteria: POC and Census Plan workflows produce useful first-draft documents.
+Build app/api/workflow/route.js — intake validation + Anthropic + draft storage
+Build Workflow Launcher + 4 intake forms (POC, Appeal, Census, Comparison)
+Build Draft Workspace UI — 5-step flow with source review and export
+Build Knowledge Admin screen — upload, metadata, review queue
+Add building metrics edit flow to Building Intelligence view (uses UPDATE policy from corrected Migration 007)
+Pilot: Azra runs 3 POC workflows, Eli runs 3 appeal workflows
+Phase 3 — Learning Engine (Days 21–30)
+Exit criteria: High-quality answers being promoted to reusable knowledge. Platform measurably improving.
+Build review queue UI and artifact promotion flow
+Build analytics view for corporate_admin
+Run Migration 006 (pgvector HNSW index). Generate embeddings for approved knowledge via Anthropic embeddings API. Switch retrieve.js to vector cosine search.
+Add bulk import from completed intake Excel workbook → write to building_metrics
+Full rollout to all 7 buildings
+8. Environment Variables — Corrected
+BUG: V2.0 used SUPABASE_URL and SUPABASE_ANON_KEY in Phase 0 but NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in the variable table. A builder following Phase 0 literally would have a misconfigured frontend.
+FIX: Single source of truth below. NEXT_PUBLIC_ prefix required for any variable read by browser-side code. Server-only variables must never have NEXT_PUBLIC_ prefix.
+.env.local should be committed to git ONLY with the two NEXT_PUBLIC_ variables. SUPABASE_SERVICE_ROLE_KEY and ANTHROPIC_API_KEY must NEVER be in .env.local or any committed file. Add them to Vercel dashboard only.
+9. Additional QA Tests for V2.1 Fixes
+These tests verify the seven QA findings are actually resolved. Run these in addition to the full V2.0 test suite.
+Auth and middleware tests (P0 fixes)
+Navigate to /dashboard without logging in → must redirect to /login (not serve the page)
+Navigate to /ask without logging in → must redirect to /login
+Navigate to /knowledge without logging in → must redirect to /login
+Log in as a facility_admin. Navigate to /knowledge → must redirect or show 403 (not serve the knowledge admin screen)
+Log in as a new user. Confirm they land on /pending, not /dashboard.
+POST /api/chat without a session cookie → must return 401, not forward to Anthropic
+Inspect request headers in DevTools when sending a message → x-user-role header must NOT be visible (set server-side only)
+Migration and schema tests (P0 fixes)
+Run migrations 001–007 in order from a clean database. Confirm zero SQL errors.
+Confirm v_latest_building_metrics returns name, short_name, cms_provider_id, state, strategic_priority, and census_trend for each building.
+Insert two building_metrics rows for Crossett with different census values → confirm census_trend shows 'growing' or 'declining' correctly.
+Run Migration 006 (vector index) after 001-007. Confirm no errors.
+RLS tests (P1 fixes)
+Log in as facility_admin for Crossett. Query building_metrics for Glenwood → must return zero rows.
+Log in as regional_operator. Query building_metrics for all buildings → must return all 7 rows.
+Log in as facility_admin. Attempt to UPDATE building_metrics for own building → must succeed.
+Log in as mds_coordinator. Attempt to UPDATE building_metrics → must fail with RLS error.
+Log in as regional_operator. Query messages for a conversation owned by another user → must return rows (regional read access).
+Log in as facility_admin. Query messages for a conversation owned by another user → must return zero rows.
+Onboarding tests (P1 fix)
+Create a new Supabase auth user via magic link. Without any manual intervention, confirm a profiles row exists with role='pending'.
+Confirm the new user lands on /pending screen, not /dashboard.
+In /settings/users, upgrade role to 'facility_admin' and assign a building. Confirm user can now reach /dashboard on next login.
+Retrieval tests (P2 fix)
+Call /api/knowledge/search. Confirm response includes owner_name, review_due_date, is_stale, and stale_days_overdue for each result.
+Mark a knowledge source's review_due_date as yesterday. Confirm is_stale=true and stale_days_overdue=1 in the response.
+Confirm source drawer in Ask Workspace shows owner name, effective date, and a staleness warning when is_stale=true.
+IHCM Operating Intelligence Platform — V2.1 Corrected Build Specification
+Independence Healthcare Management  |  Confidential  |  March 2026
+[TABLE]
+QA Finding | Severity | Fix in this document
+Middleware matcher won't fire on route-group URLs | P0 | Section 2: Rewritten middleware with correct URL-based matcher and role injection
+Migration 006 references tables not yet created; pgvector missing | P0 | Section 3: Migrations renumbered and reordered. pgvector enabled in Migration 001.
+v_latest_building_metrics missing name, cms_provider_id, state, strategic_priority, census_trend | P1 | Section 3: View rewritten to JOIN buildings table and derive census_trend.
+RLS inconsistencies: regional read blocked, no UPDATE policy, facility admin over-scoped | P1 | Section 3: All RLS policies rewritten with correct role checks and UPDATE policy added.
+No profile creation trigger — real users land in broken state | P1 | Section 3: Supabase trigger added in Migration 001. Section 4: Onboarding flow specified.
+retrieveKnowledge() missing owner, review_date, staleness signal | P2 | Section 6: Function rewritten with full SELECT and staleness computation.
+Env var names inconsistent between Phase 0 and variable table | P2 | Section 11: All references use NEXT_PUBLIC_ prefix consistently.
+[TABLE]
+Open question | Decision
+Literal /platform/... URLs vs route groups only? | Route groups only (no /platform/ prefix in URLs). Middleware uses URL-path-based matcher listing each top-level route.
+Facility admins scoped to primary_building_id or system-wide? | Scoped to primary_building_id everywhere. Regional operators see all buildings. Corporate admin sees all.
+Profile creation: automatic on login or admin-approved? | Auto-created with role 'pending' on first login. Supabase trigger creates the row. corporate_admin upgrades role via admin UI. Routes check role != 'pending' — pending users see an access-pending screen.
+[TABLE]
+Person | Role | Primary building
+Dov Braun | corporate_admin | null (access to all)
+Azra Suljic | regional_operator | null (access to all)
+Steven Feld | regional_operator | null (access to all)
+Natasha Reyes | regional_operator | null (access to all)
+Eli Braun | billing_rcm | null (portfolio-wide billing)
+Building administrators (x7) | facility_admin | Set to their building at activation
+DONs (x7) | don | Set to their building at activation
+MDS coordinators (x7) | mds_coordinator | Set to their building at activation
+[TABLE]
+Variable name | Browser-accessible? | Source | Where set
+NEXT_PUBLIC_SUPABASE_URL | YES | Supabase → Settings → API → Project URL | Vercel + .env.local
+NEXT_PUBLIC_SUPABASE_ANON_KEY | YES | Supabase → Settings → API → anon public | Vercel + .env.local
+SUPABASE_SERVICE_ROLE_KEY | NO | Supabase → Settings → API → service_role secret | Vercel ONLY. Never .env.local committed to git.
+ANTHROPIC_API_KEY | NO | Same key from existing IHCM projects | Vercel ONLY. Never .env.local committed to git.
+[COMMENTS]
+[FOOTNOTES]
