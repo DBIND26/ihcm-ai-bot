@@ -60,9 +60,10 @@ export default function BuildingDetail({ building, onBack, onChat }) {
         </div>
 
         {/* Metrics */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '12px', marginBottom: '14px' }}>
           <MetricBox label="Census" value={b.census || 0} sub={`/ ${b.bed_capacity || '?'} beds`} />
           <MetricBox label="Occupancy" value={`${occupancyPct}%`} color={occupancyPct < 70 ? '#dc2626' : occupancyPct < 85 ? '#d97706' : '#166534'} />
+          <MetricBox label="Skilled Mix" value={b.skilled_mix_pct != null ? `${b.skilled_mix_pct}%` : '—'} color={b.skilled_mix_pct >= 20 ? '#166534' : b.skilled_mix_pct >= 10 ? '#d97706' : '#dc2626'} />
           <MetricBox label="Risk Score" value={b.composite_score || '—'} color={risk.text} />
         </div>
 

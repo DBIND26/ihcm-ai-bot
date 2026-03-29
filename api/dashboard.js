@@ -24,7 +24,7 @@ export default async function handler(req, res) {
     // Get all buildings with context
     const { data: buildings, error: bErr } = await supabase
       .from('v_bot_building_context')
-      .select('slug, label, state, bed_capacity, census, occupancy_gap, strategic_status, composite_score, risk_label, payer_context, survey_context, staffing_context, reimbursement_context, risk_watchlist, strategic_notes, market_summary, referral_summary, growth_barriers, growth_opportunities')
+      .select('slug, label, state, bed_capacity, census, occupancy_gap, strategic_status, composite_score, risk_label, skilled_mix_pct, medicaid_pct, payer_context, survey_context, staffing_context, reimbursement_context, risk_watchlist, strategic_notes, market_summary, referral_summary, growth_barriers, growth_opportunities')
       .order('composite_score', { ascending: false, nullsFirst: false });
 
     if (bErr) {
