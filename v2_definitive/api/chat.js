@@ -340,6 +340,8 @@ async function fetchKnowledgeContext(roleId, facilityId, stateCode) {
       billing: ['payer_guidance', 'state_reimbursement'],
       admin: ['corporate_playbook', 'operator_practice', 'referral_intelligence'],
       regional: ['corporate_playbook', 'operator_practice', 'state_reimbursement', 'referral_intelligence'],
+      marketing: ['corporate_playbook', 'referral_intelligence', 'operator_practice'],
+      therapy: ['corporate_playbook', 'payer_guidance', 'state_reimbursement', 'operator_practice'],
     };
 
     const types = roleSourceTypes[roleId] || ['corporate_playbook', 'operator_practice'];

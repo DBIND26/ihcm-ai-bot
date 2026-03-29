@@ -648,6 +648,275 @@ export const WORKFLOWS = {
       ].filter(Boolean).join('\n');
     },
   },
+  // ── Marketing workflows ──
+
+  swot_analysis: {
+    id: 'swot_analysis',
+    roleId: 'marketing',
+    label: 'SWOT Analysis',
+    description: 'Generate a comprehensive SWOT analysis for a building using operational data, market context, and survey history.',
+    requiredInputs: [
+      { name: 'building', label: 'Building Name', type: 'text', placeholder: 'e.g. Nightingale at Crossett' },
+    ],
+    optionalInputs: [
+      { name: 'focus_area', label: 'Focus Area', type: 'text', placeholder: 'e.g. skilled census growth, referral development' },
+      { name: 'competitor_notes', label: 'Competitor Notes', type: 'textarea', placeholder: 'Any known competitor info' },
+    ],
+    missingInfoQuestions: ['Which building should I analyze?'],
+    outputSections: [
+      'Strengths (internal advantages)',
+      'Weaknesses (internal challenges)',
+      'Opportunities (external growth levers)',
+      'Threats (external risks)',
+      'Priority Actions (top 3 strategic moves)',
+      'Metrics to Track',
+    ],
+    reviewChecklist: [
+      'Strengths grounded in real building data (census, payer, staffing)',
+      'Weaknesses reflect actual operational challenges',
+      'Opportunities are actionable within 90 days',
+      'Threats include competitive and regulatory factors',
+      'Priority actions have owners and timelines',
+    ],
+    promptTemplate(inputs) {
+      return [
+        `Generate a SWOT analysis for ${inputs.building}.`,
+        inputs.focus_area ? `Focus area: ${inputs.focus_area}` : '',
+        inputs.competitor_notes ? `Competitor context: ${inputs.competitor_notes}` : '',
+        `Use the building's actual payer mix, census, occupancy gap, survey history, staffing context, and strategic notes.`,
+        `Required sections: ${this.outputSections.join(', ')}.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
+
+  census_growth_plan: {
+    id: 'census_growth_plan',
+    roleId: 'marketing',
+    label: '90-Day Census Growth Plan',
+    description: 'Draft a structured 90-day plan to grow census with specific actions, owners, and milestones.',
+    requiredInputs: [
+      { name: 'building', label: 'Building Name', type: 'text', placeholder: '' },
+      { name: 'target_census', label: 'Target Census (90 days)', type: 'text', placeholder: 'e.g. 75' },
+    ],
+    optionalInputs: [
+      { name: 'current_initiatives', label: 'Current Marketing Initiatives', type: 'textarea', placeholder: '' },
+    ],
+    missingInfoQuestions: ['Which building?', 'What is the 90-day census target?'],
+    outputSections: [
+      'Current State (census, occupancy, payer mix)',
+      'Month 1 Actions (quick wins)',
+      'Month 2 Actions (referral development)',
+      'Month 3 Actions (program launches)',
+      'Referral Source Targets (top 5)',
+      'Payer Mix Strategy',
+      'Milestones and KPIs',
+    ],
+    reviewChecklist: [
+      'Current state uses actual building data',
+      'Actions are specific with responsible parties',
+      'Referral targets are named or categorized',
+      'KPIs are measurable',
+    ],
+    promptTemplate(inputs) {
+      return [
+        `Draft a 90-day census growth plan for ${inputs.building} with target census of ${inputs.target_census}.`,
+        inputs.current_initiatives ? `Current initiatives: ${inputs.current_initiatives}` : '',
+        `Required sections: ${this.outputSections.join(', ')}.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
+
+  referral_development_plan: {
+    id: 'referral_development_plan',
+    roleId: 'marketing',
+    label: 'Referral Development Plan',
+    description: 'Create a targeted referral development strategy identifying top referral sources and relationship-building actions.',
+    requiredInputs: [
+      { name: 'building', label: 'Building Name', type: 'text', placeholder: '' },
+    ],
+    optionalInputs: [
+      { name: 'current_sources', label: 'Current Top Referral Sources', type: 'textarea', placeholder: 'e.g. Baptist Hospital, Dr. Smith' },
+      { name: 'target_payer', label: 'Target Payer Type', type: 'text', placeholder: 'e.g. Medicare, Managed Care' },
+    ],
+    missingInfoQuestions: ['Which building?'],
+    outputSections: [
+      'Current Referral Landscape',
+      'Target Referral Sources (top 5-10)',
+      'Outreach Strategy per Source',
+      'Managed Care Contract Opportunities',
+      'Physician Relationship Plan',
+      'Community Partnership Targets',
+      'Timeline and Milestones',
+    ],
+    reviewChecklist: [
+      'Referral targets are specific and prioritized',
+      'Outreach actions have owners and timelines',
+      'Managed care strategy aligned with building payer context',
+    ],
+    promptTemplate(inputs) {
+      return [
+        `Draft a referral development plan for ${inputs.building}.`,
+        inputs.current_sources ? `Current referral sources: ${inputs.current_sources}` : '',
+        inputs.target_payer ? `Target payer focus: ${inputs.target_payer}` : '',
+        `Required sections: ${this.outputSections.join(', ')}.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
+
+  // ── Therapy workflows ──
+
+  hipps_analysis: {
+    id: 'hipps_analysis',
+    roleId: 'therapy',
+    label: 'HIPPS Code Analysis',
+    description: 'Analyze a HIPPS code to identify the weakest component and targeted education opportunities.',
+    requiredInputs: [
+      { name: 'hipps_code', label: 'HIPPS Code (5 characters)', type: 'text', placeholder: 'e.g. 4LJ20' },
+      { name: 'patient_summary', label: 'Patient Clinical Summary', type: 'textarea', placeholder: 'Key diagnoses, functional status, services' },
+    ],
+    optionalInputs: [
+      { name: 'gg_scores', label: 'Section GG Scores', type: 'textarea', placeholder: 'e.g. Eating: 03, Toileting: 02, Transfer: 01' },
+      { name: 'nta_items', label: 'Active NTA Items', type: 'textarea', placeholder: 'e.g. IV meds, ventilator, isolation' },
+    ],
+    missingInfoQuestions: ['What is the HIPPS code?', 'Brief patient clinical summary?'],
+    outputSections: [
+      'HIPPS Code Breakdown (5 components)',
+      'Current Payment Tier per Component',
+      'Weakest Component Identification',
+      'Documentation Gap Analysis',
+      'Targeted Education Recommendations',
+      'Estimated Revenue Impact if Improved',
+    ],
+    reviewChecklist: [
+      'HIPPS breakdown is accurate',
+      'Weak component identification is justified',
+      'Education recommendations are specific and actionable',
+      'Revenue impact estimates are reasonable',
+    ],
+    promptTemplate(inputs) {
+      return [
+        `Analyze HIPPS code: ${inputs.hipps_code}`,
+        `Patient summary: ${inputs.patient_summary}`,
+        inputs.gg_scores ? `Section GG scores: ${inputs.gg_scores}` : '',
+        inputs.nta_items ? `Active NTA items: ${inputs.nta_items}` : '',
+        `Required sections: ${this.outputSections.join(', ')}.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
+
+  gg_scoring_review: {
+    id: 'gg_scoring_review',
+    roleId: 'therapy',
+    label: 'Section GG Scoring Review',
+    description: 'Review Section GG functional scoring for accuracy and identify if scores reflect actual admission-day performance.',
+    requiredInputs: [
+      { name: 'patient_description', label: 'Patient Functional Description', type: 'textarea', placeholder: 'Describe the patient\'s actual functional performance at admission' },
+    ],
+    optionalInputs: [
+      { name: 'current_gg_scores', label: 'Current GG Scores (if already coded)', type: 'textarea', placeholder: 'e.g. Eating: 04, Oral hygiene: 03, Toilet transfer: 02' },
+      { name: 'diagnoses', label: 'Primary Diagnoses', type: 'textarea', placeholder: '' },
+    ],
+    missingInfoQuestions: ['Describe the patient\'s functional performance at admission'],
+    outputSections: [
+      'Recommended GG Scores per Item',
+      'Justification for Each Score',
+      'Scores That May Be Coded Too High',
+      'Scores That May Be Coded Too Low',
+      'Documentation Recommendations',
+      'Quality Measure Impact (SO42, ADL, Mobility)',
+    ],
+    reviewChecklist: [
+      'Scores reflect admission-day performance, not potential',
+      'Each score has clinical justification',
+      'Quality measure impact is noted',
+    ],
+    promptTemplate(inputs) {
+      return [
+        `Review Section GG scoring for this patient.`,
+        `Functional description: ${inputs.patient_description}`,
+        inputs.current_gg_scores ? `Current GG scores: ${inputs.current_gg_scores}` : '',
+        inputs.diagnoses ? `Diagnoses: ${inputs.diagnoses}` : '',
+        `Required sections: ${this.outputSections.join(', ')}.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
+
+  cmi_optimization: {
+    id: 'cmi_optimization',
+    roleId: 'therapy',
+    label: 'CMI Optimization Report',
+    description: 'Analyze case mix components to identify patients close to a higher payment tier and what documentation would move them up.',
+    requiredInputs: [
+      { name: 'patient_info', label: 'Patient Info (diagnoses, services, GG scores)', type: 'textarea', placeholder: 'Include key diagnoses, active services, and GG scores if available' },
+      { name: 'current_cmi', label: 'Current CMI / Payment Category', type: 'text', placeholder: 'e.g. 1.42 or Nursing HDE1' },
+    ],
+    optionalInputs: [
+      { name: 'hipps_code', label: 'HIPPS Code', type: 'text', placeholder: '' },
+    ],
+    missingInfoQuestions: ['What are the patient\'s key diagnoses and services?', 'What is the current CMI or payment category?'],
+    outputSections: [
+      'Current Component Breakdown (PT, OT, SLP, Nursing, NTA)',
+      'Proximity to Next Tier per Component',
+      'Highest-Impact Documentation Targets',
+      'Specific Actions to Capture Missing Items',
+      'Revenue Impact Estimate',
+    ],
+    reviewChecklist: [
+      'Component analysis is accurate',
+      'Tier proximity is realistic',
+      'Documentation targets are clinically supportable',
+    ],
+    promptTemplate(inputs) {
+      return [
+        `Analyze CMI components and identify optimization opportunities.`,
+        `Patient info: ${inputs.patient_info}`,
+        `Current CMI/category: ${inputs.current_cmi}`,
+        inputs.hipps_code ? `HIPPS code: ${inputs.hipps_code}` : '',
+        `Required sections: ${this.outputSections.join(', ')}.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
+
+  therapy_progress_appeal: {
+    id: 'therapy_progress_appeal',
+    roleId: 'therapy',
+    label: 'Therapy Progress / Appeal Support',
+    description: 'Generate a therapy progress comparison (7-day by 7-day) and supporting documentation for continued stay appeals.',
+    requiredInputs: [
+      { name: 'patient_summary', label: 'Patient Summary', type: 'textarea', placeholder: 'Diagnoses, admission reason, therapy goals' },
+      { name: 'functional_data', label: 'Functional Status Data (7-day comparisons)', type: 'textarea', placeholder: 'e.g. Week 1: Transfer 02, Walking 01; Week 2: Transfer 03, Walking 02' },
+    ],
+    optionalInputs: [
+      { name: 'plof', label: 'Prior Level of Function (PLOF)', type: 'textarea', placeholder: '' },
+      { name: 'denial_reason', label: 'Denial Reason (if appealing)', type: 'textarea', placeholder: '' },
+    ],
+    missingInfoQuestions: ['Patient summary?', 'Functional status data for comparison periods?'],
+    outputSections: [
+      'Patient Background and Therapy Goals',
+      'Functional Progress Comparison (week-by-week)',
+      'Measurable Gains Identified',
+      'Plateaus or Areas of Concern',
+      'Clinical Justification for Continued Services',
+      'PLOF Comparison and Discharge Safety Assessment',
+      'Appeal Language (if applicable)',
+    ],
+    reviewChecklist: [
+      'Progress data is accurately represented',
+      'Gains are measurable and documented',
+      'Appeal language is factual and clinical',
+      'PLOF comparison supports continued stay',
+    ],
+    promptTemplate(inputs) {
+      return [
+        `Generate a therapy progress analysis and appeal support document.`,
+        `Patient: ${inputs.patient_summary}`,
+        `Functional data: ${inputs.functional_data}`,
+        inputs.plof ? `PLOF: ${inputs.plof}` : '',
+        inputs.denial_reason ? `Denial reason: ${inputs.denial_reason}` : '',
+        `Required sections: ${this.outputSections.join(', ')}.`,
+      ].filter(Boolean).join('\n');
+    },
+  },
 };
 
 // ── Helpers ──
