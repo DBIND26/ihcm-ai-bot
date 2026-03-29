@@ -802,7 +802,7 @@ export default function App() {
           >
             Chat
           </button>
-          {['super_admin', 'corporate_admin'].includes(userSession.appRole) && (
+          {userSession.appRole === 'super_admin' && (
             <button
               onClick={() => setViewMode('admin')}
               style={{

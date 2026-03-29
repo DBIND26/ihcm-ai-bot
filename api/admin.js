@@ -21,7 +21,7 @@ export default async function handler(req, res) {
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
 
   // Admin only
-  const adminRoles = ['super_admin', 'corporate_admin'];
+  const adminRoles = ['super_admin'];
   if (!adminRoles.includes(auth.profile.app_role)) {
     return res.status(403).json({ error: 'Admin access required' });
   }
