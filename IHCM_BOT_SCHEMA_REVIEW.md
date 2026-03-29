@@ -1,9 +1,9 @@
-# IHCM AI Bot — Full Schema for QA Review (v2)
+# IHCM AI Bot — Full Schema for QA Review (v3)
 
-**Date:** 2026-03-29 (end of day)
+**Date:** 2026-03-29
 **Live URL:** https://ihcm-ai-bot.vercel.app
 **Repo:** https://github.com/DBIND26/ihcm-ai-bot
-**Latest commit:** 35859c0 (Fix CMS survey ingestion: use new Provider Data API)
+**Latest commit:** cc4db50 (Enforce RLS on API reads + remove localStorage fallbacks)
 
 ---
 
@@ -12,17 +12,23 @@
 An AI-powered operational assistant for Independence Healthcare Management (IHCM), a skilled nursing facility operator with **7 buildings** across Arkansas, Ohio, and Pennsylvania. Uses Claude Sonnet 4 with a 7-layer context assembly pipeline to give role-specific, building-aware guidance.
 
 ### Key Capabilities
-- 5 role engines (DON, MDS, Billing, Admin, Regional)
+- 7 role engines (DON, MDS, Billing, Admin, Regional, Marketing, Therapy)
 - 7 building profiles with real operational data from Supabase
 - 12+ workflow templates for structured document drafting
 - CMS 2567 PDF parsing with citation-level POC guidance
+- SWOT analysis upload (PDF, Word, text) with auto building detection
 - **Supabase Auth** (email/password, JWT-verified on all endpoints)
+- **RLS enforcement** on user-facing reads (anon key + JWT)
 - Server-side conversation persistence with role-scoped history
+- Conversation deletion
 - Server-side feedback collection
 - Knowledge base with approval workflow and regulatory seed data
-- Portfolio dashboard with risk cards and alerts
+- Portfolio dashboard with building drill-down and alert accordion
+- Skilled mix tracking (Med A + Managed Care %)
+- Admin dashboard with analytics, trend charts, usage breakdowns
 - SNF Metrics daily census CSV ingest
 - CMS survey deficiency data ingestion (public API, last 2 years)
+- CMS survey auto-pull cron (monthly on 1st at 6 AM UTC)
 - Building history (surveys + events) persisted to Supabase
 - Upstash Redis rate limiting (production-safe across serverless instances)
 - Context windowing for cost/latency control
@@ -43,69 +49,84 @@ Browser (React 18 + Vite)
   |-- POST /api/feedback           →  feedback_events table
   |-- POST /api/parse-2567         →  CMS 2567 PDF parsing
   |-- GET  /api/conversations      →  List/load conversations (JWT-scoped)
-  |-- GET  /api/dashboard          →  Portfolio building cards + alerts
+  |-- DELETE /api/conversations    →  Delete conversation (ownership-checked)
+  |-- GET  /api/dashboard          →  Portfolio building cards + alerts + skilled mix
   |-- GET  /api/building-history   →  Surveys + events per building
-  |-- POST /api/building-history   →  Add building event
+  |-- POST /api/building-history   →  Add building event or persist survey
   |-- POST /api/ingest-census      →  SNF Metrics CSV upload
-  |-- POST /api/ingest-cms-surveys →  CMS deficiency data pull
+  |-- POST /api/ingest-cms-surveys →  CMS deficiency data pull (manual)
+  |-- GET/POST /api/cron-cms-surveys → CMS deficiency cron (monthly) + manual pull
   |-- GET/POST/PATCH /api/ingest-knowledge → Knowledge base CRUD
+  |-- POST /api/ingest-swot        →  SWOT analysis upload (PDF/Word/text)
+  |-- GET  /api/admin              →  Admin dashboard data (super_admin only)
   |
 Vercel Serverless Functions (Node.js ESM)
   |
   |-- Anthropic SDK (Claude Sonnet 4)
-  |-- Supabase JS Client (service_role key for writes, JWT verification for auth)
+  |-- Supabase JS Client
+  |     |-- service_role key (admin writes)
+  |     |-- anon key + JWT (RLS-enforced reads)
   |-- Upstash Redis (rate limiting)
   |
 PostgreSQL (Supabase)
-  |-- 11 migrations applied
+  |-- 13 migrations applied
   |-- Supabase Auth (email/password)
-  |-- v_bot_building_context view (with building_profiles JOIN)
+  |-- v_bot_building_context view (facilities + risk + profiles joined)
   |-- CMS survey deficiency data (132 deficiencies across 34 surveys)
+  |-- RLS policies enforced via anon key + user JWT
 ```
 
 ---
 
 ## 3. File Structure (Active Files Only)
 
-### Frontend (React 18 + Vite) — 2,421 lines
+### Frontend (React 18 + Vite) — 3,229 lines
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/App.jsx` | 1,643 | Main app shell: state, API calls, layout, view switching |
+| `src/App.jsx` | 1,327 | Main app shell: state, API calls, layout, view switching |
+| `src/components/AdminDashboard.jsx` | 415 | Admin view: users, conversations, feedback, knowledge, surveys, trend charts |
+| `src/components/BuildingDetail.jsx` | 254 | Building drill-down: context, risk, alerts accordion |
+| `src/components/Dashboard.jsx` | 179 | Portfolio view: building cards, risk scores, skilled mix, alerts |
 | `src/components/AccessGate.jsx` | 176 | Supabase Auth login form + password reset |
-| `src/components/Dashboard.jsx` | 157 | Portfolio view: building cards, risk scores, alerts |
-| `src/components/MessageList.jsx` | 98 | Message rendering, feedback buttons, copy |
+| `src/components/ControlsRow.jsx` | 176 | Building selector, uploads, toggles, chat history |
 | `src/components/BuildingHistoryPanel.jsx` | 142 | Survey history, event timeline, add event |
-| `src/components/ConversationHistoryPanel.jsx` | 54 | Server-side conversation list + load |
 | `src/components/formatMarkdown.jsx` | 144 | Markdown renderer (bold, links, lists, code blocks) |
+| `src/components/WorkflowPanel.jsx` | 101 | Workflow selector + input form |
+| `src/components/MessageList.jsx` | 98 | Message rendering, feedback buttons, copy |
+| `src/components/ChatInput.jsx` | 80 | Message input, send button, export, PHI warning |
+| `src/components/ConversationHistoryPanel.jsx` | 71 | Conversation list + load + delete |
+| `src/components/RoleTabs.jsx` | 43 | Role tab bar (7 roles) |
+| `src/buildingHistory.js` | 16 | EVENT_CATEGORIES constant (server persistence only) |
 | `src/lib/supabase.js` | 7 | Browser Supabase client (anon key) |
-| `src/storage.js` | 76 | localStorage persistence (fallback only) |
-| `src/buildingHistory.js` | 171 | localStorage building history (fallback only) |
 
-### Backend (Vercel Serverless) — 2,399 lines
+### Backend (Vercel Serverless) — 3,581 lines
 | File | Lines | Purpose |
 |------|-------|---------|
-| `v2_definitive/api/chat.js` | 709 | Core chat: auth, context assembly, Claude API, conversation persistence |
-| `api/dashboard.js` | 88 | Portfolio data: buildings + alerts from Supabase |
-| `api/conversations.js` | 131 | List/load conversations (JWT ownership-checked) |
-| `api/building-history.js` | 107 | Building surveys + events from Supabase |
-| `api/feedback.js` | 92 | Feedback to Supabase feedback_events |
+| `v2_definitive/api/chat.js` | 730 | Core chat: auth, context assembly, Claude API, conversation persistence |
+| `api/parse-2567.js` | 572 | CMS 2567 PDF parsing |
+| `api/ingest-swot.js` | 342 | SWOT analysis upload (PDF/Word/text) with building detection |
+| `api/ingest-knowledge.js` | 290 | Knowledge base CRUD with dedupe + approval |
+| `api/admin.js` | 241 | Admin dashboard: metrics, trends, usage breakdowns |
 | `api/ingest-census.js` | 204 | SNF Metrics CSV parsing + Supabase update |
-| `api/ingest-cms-surveys.js` | 176 | CMS Provider Data API → building_surveys |
-| `api/ingest-knowledge.js` | 224 | Knowledge base CRUD with dedupe + approval |
-| `api/parse-2567.js` | 355 | CMS 2567 PDF parsing |
-| `api/chat.js` | 2 | Vercel routing wrapper → v2_definitive/api/chat.js |
-| `api/lib/requireAuth.js` | 48 | JWT verification middleware (Supabase Auth) |
+| `server.js` | 190 | Local dev server (wraps all endpoints) |
+| `api/building-history.js` | 188 | Building surveys + events from Supabase |
+| `api/ingest-cms-surveys.js` | 176 | CMS Provider Data API → building_surveys (manual) |
+| `api/conversations.js` | 171 | List/load/delete conversations (JWT ownership-checked) |
+| `api/cron-cms-surveys.js` | 160 | CMS survey cron (monthly) + manual pull button |
+| `api/dashboard.js` | 99 | Portfolio data: buildings + alerts + skilled mix |
+| `api/feedback.js` | 92 | Feedback to Supabase feedback_events |
 | `api/lib/rateLimit.js` | 63 | Upstash Redis rate limiting |
-| `server.js` | 175 | Local dev server (wraps all endpoints) |
+| `api/lib/requireAuth.js` | 61 | JWT verification + RLS-enforced client creation |
+| `api/chat.js` | 2 | Vercel routing wrapper → v2_definitive/api/chat.js |
 
-### Data Layer (Static Fallbacks) — 1,326 lines
+### Data Layer (Static) — 1,755 lines
 | File | Lines | Purpose |
 |------|-------|---------|
-| `v2_definitive/src/bots.js` | 390 | 5 role engines with system prompts |
+| `v2_definitive/src/workflows.js` | 930 | 12+ workflow templates |
+| `v2_definitive/src/bots.js` | 550 | 7 role engines with system prompts |
 | `v2_definitive/src/buildings.js` | 275 | 7 buildings with profiles |
-| `v2_definitive/src/workflows.js` | 661 | 12+ workflow templates |
 
-### Database (Supabase PostgreSQL) — 11 migrations
+### Database (Supabase PostgreSQL) — 13 migrations
 | Migration | Purpose |
 |-----------|---------|
 | `202603120001_core_schema.sql` | Core tables: facilities, episodes, MDS, staffing, alerts, risk, incidents, reimbursement, briefs |
@@ -119,6 +140,8 @@ PostgreSQL (Supabase)
 | `202603290004_knowledge_dedupe.sql` | content_hash + unique constraint on knowledge_sources |
 | `202603290005_auth_users_setup.sql` | allowed_bot_roles column + FK relaxation for Supabase Auth |
 | `202603290006_building_history.sql` | building_surveys + building_events tables + CMS provider IDs |
+| `202603290007_fix_crossett_alert.sql` | Fix Crossett alert data (correct census, remove false agency claim) |
+| `202603290008_skilled_mix_columns.sql` | skilled_mix_pct + medicaid_pct on building_profiles + view update |
 
 ---
 
@@ -159,21 +182,21 @@ PostgreSQL (Supabase)
 | `feedback_events` | User ratings (useful, not_useful, questionable, needs_review) |
 | `review_queue` | Knowledge manager oversight queue |
 
-### Building Intelligence (migrations 8 + 11)
+### Building Intelligence (migrations 8 + 11 + 13)
 | Table | Purpose |
 |-------|---------|
-| `building_profiles` | Strategic profiles: payer context, market summary, referrals, growth barriers/opportunities, survey/staffing context, risk watchlist |
+| `building_profiles` | Strategic profiles: payer context, market summary, referrals, growth barriers/opportunities, survey/staffing context, risk watchlist, **skilled_mix_pct**, **medicaid_pct** |
 | `building_surveys` | CMS deficiency data + uploaded 2567s (date, type, F-tags, scope/severity, IJ flag) |
 | `building_events` | Operational timeline (leadership changes, incidents, regulatory events) |
 
 ### Key View
 | View | Purpose |
 |------|---------|
-| `v_bot_building_context` | Flat context for chat API: facilities + facility_risk_scores + building_profiles joined |
+| `v_bot_building_context` | Flat context for chat API: facilities + facility_risk_scores + building_profiles joined. Includes skilled_mix_pct and medicaid_pct. |
 
 ---
 
-## 5. API Endpoints (10 total, all JWT-authenticated)
+## 5. API Endpoints (13 total, all JWT-authenticated except cron)
 
 ### POST /api/chat
 - **Auth**: Supabase JWT required (requireAuth)
@@ -184,17 +207,24 @@ PostgreSQL (Supabase)
 - **Output**: `{ reply, conversationId }`
 
 ### GET /api/dashboard
+- **Reads**: RLS-enforced (supabaseUser)
 - **Output**: `{ buildings: [...], totals: { total_beds, total_census, occupancy_pct, total_alerts, buildings_at_risk } }`
 - Data from v_bot_building_context + open ai_alerts per building
+- Includes skilled_mix_pct, medicaid_pct, full alert details (description, recommended_action, category, owner_role, date)
 
-### GET /api/conversations
-- **Params**: `?role=<botId>&building=<slug>` (list) or `?id=<uuid>` (detail)
-- Ownership enforced: only returns conversations for the authenticated user
+### GET/DELETE /api/conversations
+- **Reads**: RLS-enforced (supabaseUser)
+- **GET Params**: `?role=<botId>&building=<slug>` (list) or `?id=<uuid>` (detail)
+- **DELETE Params**: `?id=<uuid>` — ownership verified, deletes messages then conversation
+- Ownership enforced: only returns/deletes conversations for the authenticated user
 - Role-scoped: filters by bot_id
 
 ### GET/POST /api/building-history
+- **Reads**: RLS-enforced (supabaseUser)
+- **Writes**: service_role (supabase)
 - **GET**: `?building=<slug>` → surveys + events from Supabase
 - **POST**: `{ buildingId, category, title, description, date }` → creates event
+- **POST** (survey): `{ buildingId, kind: 'survey', survey: {...} }` → persists parsed 2567
 
 ### POST /api/feedback
 - **Rate limit**: 10/min per IP (Upstash Redis)
@@ -209,13 +239,30 @@ PostgreSQL (Supabase)
 - Fetches from data.cms.gov Provider Data API for all 7 buildings
 - Stores in building_surveys with F-tags, scope/severity, IJ detection
 
+### GET/POST /api/cron-cms-surveys
+- **Cron**: Monthly on 1st at 6 AM UTC (Vercel cron, auth via CRON_SECRET)
+- **Manual**: POST from admin UI with JWT auth ("Pull CMS Surveys Now" button)
+- Same CMS ingestion logic as ingest-cms-surveys
+
 ### GET/POST/PATCH /api/ingest-knowledge
+- **Reads**: RLS-enforced (supabaseUser)
+- **Writes**: service_role (supabase)
 - **GET**: `?status=all&type=<type>&state=<code>` → list knowledge sources
 - **POST**: Create new source (draft status, dedupe check)
 - **PATCH**: `{ source_id, status }` → approve/archive
 
+### POST /api/ingest-swot
+- Multipart upload: PDF, DOCX, or TXT
+- Auto-detects building names from content
+- Splits multi-building documents into separate knowledge_sources
+- Auto-approved as corporate_playbook with [swot, marketing, strategy] tags
+
 ### POST /api/parse-2567
 - Multipart PDF upload → parsed citations with F-tags
+
+### GET /api/admin
+- **Auth**: super_admin only
+- Returns: users, conversations (last 7 days), feedback, knowledge, surveys, usage_by_role, usage_by_building, activity_trend (30 days), feedback_trend (30 days)
 
 ---
 
@@ -227,7 +274,7 @@ Layer 2: Role Module       — Role-specific system prompt (from bots.js)
 Layer 3: Building Profile  — Payer mix, market, referrals (from v_bot_building_context)
 Layer 4: Building Snapshot — Census, risk scores, staffing (from v_bot_building_context)
 Layer 5: Intelligence      — AI-generated insights (from v_bot_building_context, future)
-Layer 5b: Building History — CMS surveys + events (from building_surveys/events via API)
+Layer 5b: Building History — CMS surveys + events (from server-loaded historyData state)
 Layer 5c: Knowledge Base   — Governed content: PDPM, state reimbursement, staffing reqs (facility > state > portfolio ranking)
 Layer 5d: Document Context — Uploaded 2567 citations (max 30K chars)
 Layer 6: Workflow Contract  — Required output sections + review checklist
@@ -238,7 +285,7 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 
 ## 7. Authentication & Authorization
 
-### Current State (Supabase Auth — Production)
+### Current State (Supabase Auth + RLS)
 | Layer | Implementation | Security Level |
 |-------|---------------|----------------|
 | Login | Supabase Auth email/password | **Server-issued JWT** |
@@ -247,6 +294,8 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 | Role assignment | user_profiles.app_role + allowed_bot_roles | **Server-side** |
 | Building access | user_profiles.global_access_level | **Server-side** |
 | API auth | Every endpoint calls requireAuth(req) → verifies JWT | **Enforced** |
+| API reads | RLS-enforced via anon key + user JWT (supabaseUser) | **Enforced** |
+| API writes | service_role key for admin-level writes | **Server-side** |
 | Conversation ownership | Verified: user_id from JWT matches conversation.user_id | **Enforced** |
 | Rate limiting | Upstash Redis: 15 chat/min, 10 feedback/min per IP | **Production-safe** |
 
@@ -260,8 +309,12 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 | Lauren Greenwood | lgreenwood@indhcm.com | regional_director | mds, regional, don |
 | Steven Isaac | SIsaac@indhcm.com | regional_director | regional, admin |
 
+### RLS Enforcement
+- **Reads**: All user-facing API endpoints (dashboard, conversations, building-history, knowledge) use `supabaseUser` client created with anon key + user JWT. Database RLS policies (role+domain+facility checks from platform hardening migration) are enforced.
+- **Writes**: service_role key used for conversation persistence, census/survey ingest, knowledge management (admin operations).
+- **Admin**: admin.js uses service_role for cross-user queries (restricted to super_admin via JS check).
+
 ### Remaining Auth Gap
-- RLS not yet enforced (service_role key used for all DB writes; JWT is verified but the DB query uses service key)
 - user_facility_access not yet populated (all users have global access via global_access_level)
 
 ---
@@ -269,15 +322,15 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 ## 8. Data Inventory
 
 ### Building Profiles (all 7 populated)
-| Building | Beds | Census | Top Payer | Risk | Key Issue |
-|----------|------|--------|-----------|------|-----------|
-| Arkadelphia | 100 | 82 | Medicaid 66% | stable (51) | Referral competition |
-| Stonegate | 76 | 60 | Medicaid 67% | stable (41) | New leadership team |
-| Glenwood | 80 | 54 | Medicaid 80% | stable (40) | Small town, cherry-pick referrals |
-| The Woods | 120 | 71 | Medicaid 66% | high_risk (61→watch) | IJ elopement, staffing weak |
-| Crossett | 83 | 61 | Medicaid 79% | watch (136→critical) | Old building, MD not referring |
-| Marymount | 234 | 162 | SNF: Medicaid 57%, Managed 16% | watch (78) | 2-star, reputation, turnover |
-| Erie | 171 | 143 | Managed 20%, Medicaid 52% | stable (56) | Admin/DON turnover, agency |
+| Building | Beds | Census | Skilled Mix | Medicaid | Risk | Key Issue |
+|----------|------|--------|-------------|----------|------|-----------|
+| Arkadelphia | 100 | 82 | 13% | 66% | stable (51) | Referral competition |
+| Stonegate | 76 | 60 | 15% | 67% | stable (41) | New leadership team |
+| Glenwood | 80 | 54 | 14% | 80% | stable (40) | Small town, cherry-pick referrals |
+| The Woods | 120 | 71 | 3% | 66% | high_risk (61→watch) | IJ elopement, staffing weak |
+| Crossett | 83 | 61 | 13% | 79% | watch (136→critical) | Old building, MD not referring |
+| Marymount | 234 | 162 | 27% | 57% | watch (78) | 2-star, reputation, turnover |
+| Erie | 171 | 143 | 28% | 52% | stable (56) | Admin/DON turnover |
 
 ### CMS Survey Data (ingested)
 | Building | Surveys | Deficiencies | Has IJ? |
@@ -306,29 +359,26 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 |----------|-------|---------|
 | `ANTHROPIC_API_KEY` | Vercel + .env.local | Claude API access |
 | `SUPABASE_URL` | Vercel + .env.local | Supabase project URL (server-side) |
-| `SUPABASE_SERVICE_KEY` | Vercel + .env.local | Service role key (server-side writes) |
-| `VITE_SUPABASE_URL` | Vercel + .env.local | Supabase URL (browser, build-time) |
-| `VITE_SUPABASE_ANON_KEY` | Vercel + .env.local | Anon key (browser, build-time) |
+| `SUPABASE_SERVICE_KEY` | Vercel + .env.local | Service role key (admin writes) |
+| `VITE_SUPABASE_URL` | Vercel + .env.local | Supabase URL (browser + server RLS client) |
+| `VITE_SUPABASE_ANON_KEY` | Vercel + .env.local | Anon key (browser + server RLS client) |
 | `UPSTASH_REDIS_REST_URL` | Vercel + .env.local | Upstash Redis URL |
 | `UPSTASH_REDIS_REST_TOKEN` | Vercel + .env.local | Upstash Redis token |
-
-**Removed:** `BETA_ACCESS_CODE` (replaced by Supabase Auth)
+| `CRON_SECRET` | Vercel + .env.local | Vercel cron authentication |
 
 ---
 
 ## 10. Known Issues & Technical Debt
 
 ### Medium Priority
-1. **RLS not enforced** — service_role key bypasses RLS. JWT is verified but DB queries use admin access. Fix: use anon key + pass JWT for RLS-enforced queries.
-2. **user_facility_access not populated** — all users have global access. Building-level restrictions not active.
-3. **App.jsx still 1,643 lines** — controls row, workflow panel, input area could be extracted further.
-4. **No automated census ingest** — manual CSV upload or cron needed.
+1. **user_facility_access not populated** — all users have global access. Building-level restrictions not active.
+2. **No automated census ingest** — manual CSV upload or cron needed. No live feed from SNF Metrics.
+3. **Alert data is seed/demo only** — ai_alerts table has sample alerts, not auto-generated from real operational data. Needs real staffing/census data feeds first.
 
 ### Low Priority
-5. **No admin dashboard** — no way to view all users, conversations, feedback metrics.
-6. **Static data in bots.js/buildings.js/workflows.js** — could move to Supabase for dynamic management.
-7. **No conversation deletion** — conversations accumulate.
-8. **localStorage fallbacks still in code** — storage.js and buildingHistory.js still present for offline fallback.
+4. **Static data in bots.js/buildings.js/workflows.js** — could move to Supabase for dynamic management.
+5. **No notification system** — no email alerts for knowledge approvals, survey results, feedback.
+6. **No user management UI** — admin can view users but can't add/edit/deactivate from the app.
 
 ---
 
@@ -340,19 +390,33 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 - [ ] Password reset → sends email, user can reset
 - [ ] Session persists on page refresh (Supabase auto-recovery)
 - [ ] Sign out clears session
-- [ ] Each user sees only their allowed role tabs
+- [ ] Each user sees only their allowed role tabs (7 roles: DON, MDS, Billing, Admin, Regional, Marketing, Therapy)
 - [ ] API returns 401 without valid JWT
 
 ### Portfolio Dashboard
 - [ ] Dashboard loads on login as default view
-- [ ] Shows all 7 buildings with census, risk score, occupancy bar
+- [ ] Shows all 7 buildings with census, occupancy, **skilled mix**, risk score
+- [ ] Portfolio summary shows total census, occupancy %, **portfolio skilled mix avg**, buildings at risk, open alerts
 - [ ] Risk badges (critical/high_risk/watch/stable) are color-coded
+- [ ] Skilled mix color-coded: green ≥20%, yellow ≥10%, red <10%
 - [ ] Open alerts shown per building
 - [ ] Portfolio totals correct (census, beds, occupancy %, alerts)
-- [ ] Clicking a building card switches to chat with that building selected
+- [ ] Clicking a building card opens **building detail panel** (not chat)
+
+### Building Detail Panel
+- [ ] Shows building name, state, risk badge, census, occupancy, skilled mix, risk score
+- [ ] Occupancy bar renders correctly
+- [ ] Risk & Strategy section shows risk watchlist + strategic notes
+- [ ] Building Context section shows payer mix, market, referrals
+- [ ] Operations section shows survey, staffing, reimbursement context
+- [ ] Growth section shows barriers and opportunities (from JSONB)
+- [ ] Open Alerts section lists all alerts with severity badges
+- [ ] Clicking an alert expands it to show description, recommended action, category, owner
+- [ ] "Back to Portfolio" returns to grid
+- [ ] "Chat about [building]" switches to chat with correct building selected
 
 ### Chat
-- [ ] Each of 5 roles loads correct starters and workflows
+- [ ] Each of 7 roles loads correct starters and workflows
 - [ ] Each of 7 buildings returns building-specific answers
 - [ ] Bot references real payer mix, survey history, strategic notes
 - [ ] Knowledge base content appears in responses (PDPM, state reimbursement)
@@ -366,23 +430,43 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 - [ ] Chat History button loads conversation list from server
 - [ ] Conversations are role-scoped (DON threads don't show in Billing)
 - [ ] Clicking a conversation loads its messages
+- [ ] **Delete button (✕) removes conversation with confirmation**
+- [ ] Deleting active conversation clears chat
 - [ ] New Chat clears conversation (with confirmation)
 - [ ] Conversation continues with same ID on subsequent messages
 - [ ] Export conversation downloads .txt file
 
 ### Building History
-- [ ] History panel loads CMS survey data from Supabase (not localStorage)
+- [ ] History panel loads CMS survey data from Supabase
 - [ ] CMS deficiencies show F-tags, scope/severity per survey
 - [ ] Add Event form saves to Supabase
 - [ ] Events persist across sessions and devices
+- [ ] **No localStorage used** — all data from server
 
 ### Data Ingestion
 - [ ] Upload Census: SNF Metrics CSV updates census + payer in Supabase
 - [ ] Upload 2567: PDF parses citations and auto-sends analysis
+- [ ] Upload SWOT: PDF/Word/text saves to knowledge with building auto-detection
 - [ ] CMS survey import: pulls deficiency data for all 7 buildings
+- [ ] **Pull CMS Surveys Now button** in Admin > Surveys tab works
 - [ ] Add Playbook: saves to knowledge_sources as draft
 - [ ] Approve button promotes draft to approved (bot can reference)
 - [ ] Duplicate playbook submission rejected
+
+### Admin Dashboard (super_admin only)
+- [ ] Overview tab shows stat cards: users, conversations, feedback, knowledge
+- [ ] **Activity trend chart** shows conversations per day (30 days)
+- [ ] **Feedback trend chart** shows stacked useful/not useful/wrong (30 days)
+- [ ] **Usage by Role** horizontal bar chart
+- [ ] **Usage by Building** horizontal bar chart
+- [ ] Feedback breakdown shows useful/not useful/wrong/needs review counts
+- [ ] Users tab shows all 6 users with roles and last active
+- [ ] Conversations tab shows recent conversations with message counts
+- [ ] Feedback tab shows ratings with user context
+- [ ] Knowledge tab shows sources with status badges
+- [ ] Surveys tab shows building surveys with IJ flags
+- [ ] **Pull CMS Surveys Now** button fetches from CMS API
+- [ ] Admin view only visible to super_admin role
 
 ### Security
 - [ ] Rate limiting: 16th chat request in 1 minute returns 429
@@ -391,11 +475,12 @@ Layer 7: Conversation      — Context-windowed messages (last 10 + older summar
 - [ ] Links with javascript: protocol rendered as plain text
 - [ ] PHI disclaimer visible below chat input
 - [ ] All API endpoints return 401 without Authorization header
+- [ ] **RLS enforced**: user can only see their own conversations
+- [ ] **RLS enforced**: dashboard reads go through anon key + JWT
 
 ### Error Handling
 - [ ] Network disconnect → "Connection error" message
 - [ ] API 429 → "Too many requests" message
 - [ ] API 500 → "Server error" message
-- [ ] Supabase down → static fallbacks work for building context
 - [ ] Conversation persistence failure → non-blocking, chat still works
 - [ ] Upstash down → rate limiter fails open (no blocking)
