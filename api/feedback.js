@@ -6,9 +6,7 @@
 // Otherwise, logs to server console for later review.
 
 import { requireAuth } from './lib/requireAuth.js';
-
-let lastFeedback = {};
-const RATE_LIMIT_MS = 2000; // 2 seconds between feedback from same IP
+import { getFeedbackLimiter, checkRateLimit } from './lib/rateLimit.js';
 
 // Map frontend feedback types to schema-allowed ratings
 const RATING_MAP = {
@@ -35,13 +33,12 @@ export default async function handler(req, res) {
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
   const { user: authUser, supabase: authSupabase } = auth;
 
-  // Rate limiting
+  // Rate limiting (Upstash Redis)
   const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
-  const now = Date.now();
-  if (lastFeedback[ip] && now - lastFeedback[ip] < RATE_LIMIT_MS) {
+  const rl = await checkRateLimit(getFeedbackLimiter(), ip);
+  if (!rl.success) {
     return res.status(429).json({ error: 'Too many requests' });
   }
-  lastFeedback[ip] = now;
 
   // Validate input
   const { type, user, role, building, messagePreview, userQuestion, conversationId, timestamp } = req.body || {};
