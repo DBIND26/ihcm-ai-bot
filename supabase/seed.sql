@@ -94,7 +94,7 @@ INSERT INTO public.staffing_daily (
     source_system, source_record_id, notes
 ) VALUES
     ('d1111111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', CURRENT_DATE - 1, 'all_day', 82,  22.00, 36.00, 80.00, 4.00,  6.00,  1.8049, FALSE, 1.8000, 'staffing_demo', 'staff-1001', 'Arkadelphia coverage met target.'),
-    ('d2222222-2222-2222-2222-222222222222', '55555555-5555-5555-5555-555555555555', CURRENT_DATE - 1, 'all_day', 45,  10.00, 16.00, 40.00, 12.00, 10.00, 1.5111, TRUE,  1.8000, 'staffing_demo', 'staff-2002', 'Crossett staffing under target — high agency use.'),
+    ('d2222222-2222-2222-2222-222222222222', '55555555-5555-5555-5555-555555555555', CURRENT_DATE - 1, 'all_day', 61,  12.00, 20.00, 48.00, 0.00,  4.00,  1.3115, FALSE, 1.8000, 'staffing_demo', 'staff-2002', 'Crossett staffing stable — no agency use.'),
     ('d3333333-3333-3333-3333-333333333333', '33333333-3333-3333-3333-333333333333', CURRENT_DATE - 1, 'all_day', 70,  20.00, 32.00, 72.00, 0.00,  4.00,  1.8286, FALSE, 1.8000, 'staffing_demo', 'staff-3003', 'Glenwood model building — exemplary staffing pattern.'),
     ('d4444444-4444-4444-4444-444444444444', '66666666-6666-6666-6666-666666666666', CURRENT_DATE - 1, 'all_day', 78,  18.00, 30.00, 68.00, 6.00,  8.00,  1.5641, TRUE,  1.7500, 'staffing_demo', 'staff-4004', 'Marymount evening shift callouts.'),
     ('d5555555-5555-5555-5555-555555555555', '44444444-4444-4444-4444-444444444444', CURRENT_DATE - 2, 'all_day', 98,  26.00, 40.00, 96.00, 2.00,  6.00,  1.7347, FALSE, 1.7500, 'staffing_demo', 'staff-5005', 'The Woods stable coverage.')
@@ -109,7 +109,7 @@ INSERT INTO public.ai_alerts (
     alert_type, severity, title, description, recommended_action,
     owner_role, dedupe_key, status
 ) VALUES
-    ('e1111111-1111-1111-1111-111111111111', '55555555-5555-5555-5555-555555555555', 'aaaaaaa2-aaaa-aaaa-aaaa-aaaaaaaaaaa2', NOW() - INTERVAL '4 hours', 'staffing', 'staffing_gap', 'critical', 'Crossett staffing crisis — census at 63% with high agency dependency', 'Crossett has 45 residents with 72 beds. Agency hours are 27% of total nursing hours. HPRD is below target.', 'Activate emergency staffing protocol and consider temporary admissions hold.', 'Regional', 'alert-crossett-staffing', 'open'),
+    ('e1111111-1111-1111-1111-111111111111', '55555555-5555-5555-5555-555555555555', 'aaaaaaa2-aaaa-aaaa-aaaa-aaaaaaaaaaa2', NOW() - INTERVAL '4 hours', 'survey', 'survey_due', 'high', 'Crossett survey overdue — last survey over 1 year ago with many tags', 'Crossett has 61 residents with 83 licensed beds (72 operational). Last survey was over a year ago with significant findings. Due for resurvey.', 'Prepare survey readiness plan and conduct mock survey. Review prior deficiency areas.', 'Regional', 'alert-crossett-survey', 'open'),
     ('e2222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333', 'aaaaaaa3-aaaa-aaaa-aaaa-aaaaaaaaaaa3', NOW() - INTERVAL '2 hours', 'mds', 'assessment_due', 'high', 'PDPM 14-day assessment due within 24 hours at Glenwood', 'PDPM 14-day assessment has documentation risk flag. Missing supporting documentation.', 'Escalate to MDS lead for same-day documentation review.', 'MDS', 'alert-glenwood-mds', 'open'),
     ('e3333333-3333-3333-3333-333333333333', '66666666-6666-6666-6666-666666666666', 'aaaaaaa4-aaaa-aaaa-aaaa-aaaaaaaaaaa4', NOW() - INTERVAL '1 hours', 'clinical', 'behavioral_cluster', 'high', 'Behavioral and wound risk at Marymount', 'Multiple high-acuity concerns on one managed-care episode with overdue assessment.', 'Activate clinical review and same-day interdisciplinary huddle.', 'DON', 'alert-marymount-clinical', 'in_progress'),
     ('e4444444-4444-4444-4444-444444444444', '44444444-4444-4444-4444-444444444444', NULL, NOW() - INTERVAL '6 hours', 'staffing', 'agency_overtime_spike', 'medium', 'The Woods weekend overtime trending up', 'Two-day staffing pattern suggests weekend coverage pressure.', 'Audit schedule and freeze discretionary PTO approvals.', 'Administrator', 'alert-thewoods-staffing', 'acknowledged')
@@ -171,8 +171,8 @@ ON CONFLICT (reimbursement_event_id) DO NOTHING;
 INSERT INTO public.daily_briefs (
     brief_id, brief_date, brief_scope, facility_id, brief_text, generated_by, generated_at
 ) VALUES
-    ('c1111111-3333-1111-1111-111111111111', CURRENT_DATE, 'portfolio', NULL, 'Portfolio view: Crossett needs immediate attention — staffing crisis with 63% occupancy and high agency dependency. Marymount has behavioral escalation on a managed-care episode. Glenwood and Arkadelphia remain stable and can serve as best-practice references.', 'system', NOW()),
-    ('c2222222-3333-1111-1111-222222222222', CURRENT_DATE, 'facility', '55555555-5555-5555-5555-555555555555', 'Crossett remains the highest-priority turnaround building. Focus today: stabilize staffing, complete overdue MDS reviews, and address med error follow-up from yesterday.', 'system', NOW())
+    ('c1111111-3333-1111-1111-111111111111', CURRENT_DATE, 'portfolio', NULL, 'Portfolio view: Crossett is overdue for survey with prior significant findings — prepare survey readiness. Marymount has behavioral escalation on a managed-care episode. Glenwood and Arkadelphia remain stable and can serve as best-practice references.', 'system', NOW()),
+    ('c2222222-3333-1111-1111-222222222222', CURRENT_DATE, 'facility', '55555555-5555-5555-5555-555555555555', 'Crossett is the priority watch building. Focus today: survey readiness preparation, MD relationship rebuilding, and coordinated marketing planning with Stonegate.', 'system', NOW())
 ON CONFLICT (brief_id) DO NOTHING;
 
 INSERT INTO public.daily_brief_actions (
@@ -187,7 +187,7 @@ ON CONFLICT (brief_action_id) DO NOTHING;
 INSERT INTO public.daily_brief_facilities (
     brief_facility_id, brief_id, facility_id, priority_rank, reason
 ) VALUES
-    ('e1111111-5555-1111-1111-111111111111', 'c1111111-3333-1111-1111-111111111111', '55555555-5555-5555-5555-555555555555', 1, 'Highest priority turnaround — staffing and census crisis.'),
+    ('e1111111-5555-1111-1111-111111111111', 'c1111111-3333-1111-1111-111111111111', '55555555-5555-5555-5555-555555555555', 1, 'Priority watch — survey overdue, prepare readiness plan.'),
     ('e2222222-5555-1111-1111-222222222222', 'c1111111-3333-1111-1111-111111111111', '66666666-6666-6666-6666-666666666666', 2, 'Behavioral escalation on managed-care episode.'),
     ('e3333333-5555-1111-1111-333333333333', 'c1111111-3333-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 3, 'Stable but monitor fall incident.'),
     ('e4444444-5555-1111-1111-444444444444', 'c2222222-3333-1111-1111-222222222222', '55555555-5555-5555-5555-555555555555', 1, 'Facility-specific turnaround brief.')
