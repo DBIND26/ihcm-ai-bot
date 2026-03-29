@@ -59,6 +59,11 @@ export default function App() {
   const [error, setError] = useState(null);
   const [showWorkflowPanel, setShowWorkflowPanel] = useState(false);
 
+  // SWOT upload state
+  const [isUploadingSwot, setIsUploadingSwot] = useState(false);
+  const [swotResult, setSwotResult] = useState(null);
+  const swotInputRef = useRef(null);
+
   // 2567 Upload state — supports multiple documents
   const [uploadedDocs, setUploadedDocs] = useState([]); // array of parsed citation data
   const [isUploading, setIsUploading] = useState(false);
@@ -391,6 +396,36 @@ export default function App() {
     } finally {
       setIsUploadingCensus(false);
       if (censusInputRef.current) censusInputRef.current.value = '';
+    }
+  };
+
+  // Handle SWOT file upload (PDF, Word, or text)
+  const handleSwotUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingSwot(true);
+    setSwotResult(null);
+    setUploadError(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (activeBuildingId && activeBuildingId !== 'none') {
+        formData.append('building_id', activeBuildingId);
+      }
+      const response = await fetch('/api/ingest-swot', {
+        method: 'POST',
+        headers: userSession?.accessToken ? { 'Authorization': `Bearer ${userSession.accessToken}` } : {},
+        body: formData,
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'SWOT upload failed');
+      setSwotResult(data);
+      setTimeout(() => setSwotResult(null), 10000);
+    } catch (err) {
+      setUploadError(err.message || 'Failed to upload SWOT');
+    } finally {
+      setIsUploadingSwot(false);
+      if (swotInputRef.current) swotInputRef.current.value = '';
     }
   };
 
@@ -920,6 +955,31 @@ export default function App() {
             ? `✓ ${uploadedDocs.length} survey(s) saved (${uploadedDocs.reduce((sum, d) => sum + (d.total_citations || 0), 0)} tags)`
             : 'Upload 2567'}
         </button>
+
+        {/* SWOT upload — visible for marketing/admin/regional */}
+        {['marketing', 'admin', 'regional'].includes(activeRoleId) && (
+          <>
+            <input ref={swotInputRef} type="file" accept=".pdf,.docx,.doc,.txt"
+              onChange={handleSwotUpload} style={{ display: 'none' }} />
+            <button
+              onClick={() => swotInputRef.current?.click()}
+              disabled={isUploadingSwot}
+              style={{
+                padding: '8px 16px', borderRadius: '6px',
+                border: '1px solid #d1d5db',
+                backgroundColor: swotResult ? '#dcfce7' : '#f3f4f6',
+                cursor: isUploadingSwot ? 'not-allowed' : 'pointer',
+                fontSize: '14px', fontWeight: '500',
+                color: swotResult ? '#166534' : '#6b7280',
+                transition: 'all 0.2s ease', whiteSpace: 'nowrap',
+              }}
+            >
+              {isUploadingSwot ? 'Uploading...' : swotResult
+                ? `SWOT saved (${swotResult.results?.length || 0} building${swotResult.results?.length !== 1 ? 's' : ''})`
+                : 'Upload SWOT'}
+            </button>
+          </>
+        )}
 
         {/* Census CSV upload */}
         <input
