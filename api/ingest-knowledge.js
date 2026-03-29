@@ -53,11 +53,24 @@ export default async function handler(req, res) {
 
   // ── PATCH: approve/reject/archive a knowledge source ──
   if (req.method === 'PATCH') {
+    // Only admins can approve/archive
+    const adminRoles = ['super_admin', 'corporate_admin', 'knowledge_manager'];
+    if (!adminRoles.includes(auth.profile.app_role)) {
+      return res.status(403).json({ error: 'Only administrators can approve or archive knowledge sources' });
+    }
+
     const { source_id, status: newStatus } = req.body || {};
     if (!source_id) return res.status(400).json({ error: 'source_id is required' });
     if (!['approved', 'archived', 'in_review', 'draft'].includes(newStatus)) {
       return res.status(400).json({ error: 'Invalid status. Use: approved, archived, in_review, draft' });
     }
+
+    // Get current source for version tracking
+    const { data: current } = await supabase
+      .from('knowledge_sources')
+      .select('title, full_content, current_version')
+      .eq('source_id', source_id)
+      .single();
 
     const { data, error } = await supabase
       .from('knowledge_sources')
@@ -67,6 +80,23 @@ export default async function handler(req, res) {
       .single();
 
     if (error) return res.status(500).json({ error: error.message });
+
+    // Write knowledge_versions row for audit trail
+    if (current && newStatus === 'approved') {
+      await supabase.from('knowledge_versions').insert({
+        source_id,
+        version_number: (current.current_version || 0) + 1,
+        content_snapshot: current.full_content?.slice(0, 50000) || '',
+        changed_by: authUser.id,
+        change_summary: `Status changed to ${newStatus} by ${authUser.email}`,
+      }).catch(() => {}); // non-blocking
+
+      // Increment version counter
+      await supabase.from('knowledge_sources')
+        .update({ current_version: (current.current_version || 0) + 1 })
+        .eq('source_id', source_id)
+        .catch(() => {});
+    }
 
     console.log(JSON.stringify({
       event: 'knowledge_status_changed',
@@ -163,13 +193,17 @@ export default async function handler(req, res) {
 
   // Dedupe check: same title + type + state + facility
   try {
-    const { data: existing } = await supabase
+    let dedupeQuery = supabase
       .from('knowledge_sources')
       .select('source_id, title, status')
       .eq('title', title)
       .eq('source_type', source_type)
-      .neq('status', 'archived')
-      .limit(1);
+      .neq('status', 'archived');
+    if (resolvedStateCode) dedupeQuery = dedupeQuery.eq('state_code', resolvedStateCode);
+    else dedupeQuery = dedupeQuery.is('state_code', null);
+    if (resolvedFacilityId) dedupeQuery = dedupeQuery.eq('facility_id', resolvedFacilityId);
+    else dedupeQuery = dedupeQuery.is('facility_id', null);
+    const { data: existing } = await dedupeQuery.limit(1);
 
     if (existing?.length > 0) {
       return res.status(409).json({

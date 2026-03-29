@@ -4,9 +4,10 @@
 // Pure JavaScript implementation — no Python dependency.
 // Uses pdf-parse for text extraction, then regex-based citation parsing.
 //
-// PRE-AUTH SCAFFOLD — no user verification. Internal use only.
-
+import { requireAuth } from './lib/requireAuth.js';
 import pdf from 'pdf-parse/lib/pdf-parse.js';
+
+const MAX_PDF_SIZE = 20 * 1024 * 1024; // 20 MB
 
 // ── Common F-tag descriptions ──
 const COMMON_TAGS = {
@@ -282,9 +283,21 @@ function parseMultipart(rawBody, contentType) {
 // ── Main handler ──
 
 export default async function handler(req, res) {
+  // CORS
+  const origin = req.headers.origin || '';
+  if (origin.endsWith('.vercel.app') || origin.startsWith('http://localhost')) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // Auth check
+  const auth = await requireAuth(req);
+  if (!auth) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
     // Get the raw body as buffer
@@ -293,6 +306,9 @@ export default async function handler(req, res) {
       chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
     }
     const rawBody = Buffer.concat(chunks);
+    if (rawBody.length > MAX_PDF_SIZE) {
+      return res.status(413).json({ error: `File too large (max ${MAX_PDF_SIZE / 1024 / 1024}MB)` });
+    }
     const contentType = req.headers['content-type'] || '';
 
     console.log(`[parse-2567] Received ${rawBody.length} bytes, content-type: ${contentType}`);

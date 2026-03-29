@@ -575,6 +575,12 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: `Unknown bot: ${botId}` });
     }
 
+    // Enforce role authorization: user must have this bot role
+    const allowedRoles = authProfile.allowed_bot_roles || [];
+    if (allowedRoles.length > 0 && !allowedRoles.includes(botId)) {
+      return res.status(403).json({ error: `You do not have access to the ${botId} role` });
+    }
+
     // Validate messages
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Messages array is required' });

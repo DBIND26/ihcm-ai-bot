@@ -3,7 +3,9 @@
     "allow": [
       "Bash(rm api/lib/betaUser.js)",
       "Bash(rm api/verify-access.js)",
-      "Bash(node -e \":*)"
+      "Bash(node -e \":*)",
+      "Bash(curl -s \"https://data.cms.gov/provider-data/api/1/datastore/query/r5ix-sfxw?conditions[0][property]=federal_provider_number&conditions[0][value]=045350&conditions[0][operator]=%3D&limit=3\")",
+      "Bash(curl -s \"https://data.cms.gov/provider-data/api/1/datastore/query/r5ix-sfxw/0?limit=2\")"
     ]
   }
 }

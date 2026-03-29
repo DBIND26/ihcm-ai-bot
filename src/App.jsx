@@ -24,6 +24,19 @@ export default function App() {
     ...extra,
   });
 
+  // Listen for Supabase token refresh and update accessToken in session
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED' && session && userSession) {
+        setUserSession(prev => prev ? { ...prev, accessToken: session.access_token } : null);
+      }
+      if (event === 'SIGNED_OUT') {
+        setUserSession(null);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [userSession]);
+
   // Feedback state: { [messageIndex]: 'useful' | 'not_useful' | 'wrong' }
   const [feedback, setFeedback] = useState({});
   // Server-side conversation ID (from Supabase, returned by /api/chat)
@@ -259,6 +272,7 @@ export default function App() {
 
         const response = await fetch('/api/parse-2567', {
           method: 'POST',
+          headers: userSession?.accessToken ? { 'Authorization': `Bearer ${userSession.accessToken}` } : {},
           body: formData,
         });
 
@@ -276,12 +290,34 @@ export default function App() {
         newDocs.push(data);
       }
 
-      // All files parsed successfully — now persist to history in one batch
+      // All files parsed successfully — persist to Supabase building_surveys
       if (activeBuildingId && activeBuildingId !== 'none') {
         for (const doc of newDocs) {
+          // Save to Supabase via building-history (best-effort)
+          try {
+            await fetch('/api/building-history', {
+              method: 'POST',
+              headers: authHeaders(),
+              body: JSON.stringify({
+                buildingId: activeBuildingId,
+                category: 'survey',
+                title: `2567 Upload: ${doc.facility_name || doc._fileName || 'Survey'} (${doc.survey_date || 'date unknown'})`,
+                description: `${doc.total_citations || 0} citations. ${doc.critical_tags?.length ? 'Critical: ' + doc.critical_tags.join(', ') : 'No critical tags.'}`,
+                date: doc.survey_date || new Date().toISOString().split('T')[0],
+              }),
+            });
+          } catch { /* non-blocking */ }
+          // Also keep localStorage as fallback
           addSurvey(activeBuildingId, doc);
         }
-        setHistoryData(getBuildingHistory(activeBuildingId));
+        // Reload from server
+        try {
+          const histRes = await fetch(`/api/building-history?building=${activeBuildingId}`, { headers: authHeaders() });
+          if (histRes.ok) setHistoryData(await histRes.json());
+          else setHistoryData(getBuildingHistory(activeBuildingId));
+        } catch {
+          setHistoryData(getBuildingHistory(activeBuildingId));
+        }
       }
 
       // Update state with all new docs at once
