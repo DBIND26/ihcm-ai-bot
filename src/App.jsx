@@ -81,9 +81,11 @@ export default function App() {
   // Knowledge/playbook upload state
   const [showPlaybookForm, setShowPlaybookForm] = useState(false);
   const [playbookData, setPlaybookData] = useState({ title: '', source_type: 'corporate_playbook', content: '', state_code: '', tags: '' });
+  const [playbookFile, setPlaybookFile] = useState(null);
   const [isUploadingPlaybook, setIsUploadingPlaybook] = useState(false);
   const [playbookResult, setPlaybookResult] = useState(null);
   const [knowledgeList, setKnowledgeList] = useState([]);
+  const playbookInputRef = useRef(null);
 
   // Hospitalization review state
   const [hospResult, setHospResult] = useState(null);
@@ -485,30 +487,55 @@ export default function App() {
 
   // Handle playbook/knowledge upload
   const handlePlaybookSubmit = async () => {
-    if (!playbookData.title.trim() || !playbookData.content.trim()) {
-      setUploadError('Title and content are required');
+    const hasContent = !!playbookData.content.trim();
+    const hasFile = !!playbookFile;
+
+    if (!playbookData.title.trim() || (!hasContent && !hasFile)) {
+      setUploadError('Title and either pasted content or a file upload are required');
       return;
     }
     setIsUploadingPlaybook(true);
     setPlaybookResult(null);
     setUploadError(null);
     try {
-      const res = await fetch('/api/ingest-knowledge', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          title: playbookData.title.trim(),
-          source_type: playbookData.source_type,
-          content: playbookData.content.trim(),
-          building_id: activeBuildingId !== 'none' ? activeBuildingId : undefined,
-          state_code: playbookData.state_code || undefined,
-          tags: playbookData.tags ? playbookData.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
-        }),
-      });
+      let res;
+
+      if (hasFile) {
+        const formData = new FormData();
+        formData.append('title', playbookData.title.trim());
+        formData.append('source_type', playbookData.source_type);
+        formData.append('file', playbookFile);
+        if (hasContent) formData.append('content', playbookData.content.trim());
+        if (activeBuildingId !== 'none') formData.append('building_id', activeBuildingId);
+        if (playbookData.state_code) formData.append('state_code', playbookData.state_code);
+        if (playbookData.tags) formData.append('tags', playbookData.tags);
+
+        res = await fetch('/api/ingest-knowledge', {
+          method: 'POST',
+          headers: userSession?.accessToken ? { 'Authorization': `Bearer ${userSession.accessToken}` } : {},
+          body: formData,
+        });
+      } else {
+        res = await fetch('/api/ingest-knowledge', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({
+            title: playbookData.title.trim(),
+            source_type: playbookData.source_type,
+            content: playbookData.content.trim(),
+            building_id: activeBuildingId !== 'none' ? activeBuildingId : undefined,
+            state_code: playbookData.state_code || undefined,
+            tags: playbookData.tags ? playbookData.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
+          }),
+        });
+      }
+
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Upload failed');
       setPlaybookResult(data);
       setPlaybookData({ title: '', source_type: 'corporate_playbook', content: '', state_code: '', tags: '' });
+      setPlaybookFile(null);
+      if (playbookInputRef.current) playbookInputRef.current.value = '';
       setShowPlaybookForm(false);
       setTimeout(() => setPlaybookResult(null), 8000);
       fetchKnowledgeList(); // refresh list
@@ -832,6 +859,7 @@ export default function App() {
   const userName = userSession.userName;
   const allowedRoles = userSession.allowedRoles || getRoleIds();
   const allowedBuildings = userSession.allowedBuildings; // null = all
+  const canReviewKnowledge = ['super_admin', 'corporate_admin', 'knowledge_manager'].includes(userSession.appRole);
 
   return (
     <div
@@ -1024,6 +1052,23 @@ export default function App() {
                 onChange={e => setPlaybookData(prev => ({ ...prev, tags: e.target.value }))}
                 style={{ flex: 1, padding: '8px 12px', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '13px', fontFamily: 'inherit' }} />
             </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                ref={playbookInputRef}
+                type="file"
+                accept=".pdf,.docx,.xlsx,.pptx,.txt,.csv"
+                onChange={e => setPlaybookFile(e.target.files?.[0] || null)}
+                style={{ fontSize: '13px', color: '#4b5563' }}
+              />
+              <span style={{ fontSize: '12px', color: '#6b7280' }}>
+                Accepted: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), TXT, CSV
+              </span>
+              {playbookFile && (
+                <span style={{ fontSize: '12px', color: '#2563eb', fontWeight: '500' }}>
+                  Selected: {playbookFile.name}
+                </span>
+              )}
+            </div>
             <textarea placeholder="Paste the document content here..."
               value={playbookData.content}
               onChange={e => setPlaybookData(prev => ({ ...prev, content: e.target.value }))}
@@ -1032,11 +1077,11 @@ export default function App() {
                 fontSize: '13px', fontFamily: 'inherit', resize: 'vertical', minHeight: '120px',
               }} />
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <button onClick={handlePlaybookSubmit} disabled={isUploadingPlaybook || !playbookData.title.trim() || !playbookData.content.trim()}
+              <button onClick={handlePlaybookSubmit} disabled={isUploadingPlaybook || !playbookData.title.trim() || (!playbookData.content.trim() && !playbookFile)}
                 style={{
                   padding: '8px 16px', borderRadius: '6px', border: 'none',
-                  backgroundColor: (playbookData.title.trim() && playbookData.content.trim()) ? '#2563eb' : '#d1d5db',
-                  color: 'white', cursor: (playbookData.title.trim() && playbookData.content.trim()) ? 'pointer' : 'not-allowed',
+                  backgroundColor: (playbookData.title.trim() && (playbookData.content.trim() || playbookFile)) ? '#2563eb' : '#d1d5db',
+                  color: 'white', cursor: (playbookData.title.trim() && (playbookData.content.trim() || playbookFile)) ? 'pointer' : 'not-allowed',
                   fontSize: '13px', fontWeight: '600',
                 }}>
                 {isUploadingPlaybook ? 'Submitting...' : 'Submit to Knowledge Base'}
@@ -1087,7 +1132,7 @@ export default function App() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-                      {source.status === 'draft' && (
+                      {canReviewKnowledge && source.status === 'draft' && (
                         <button onClick={() => handleKnowledgeAction(source.source_id, 'approved')}
                           style={{
                             padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
@@ -1097,7 +1142,7 @@ export default function App() {
                           Approve
                         </button>
                       )}
-                      {source.status !== 'archived' && (
+                      {canReviewKnowledge && source.status !== 'archived' && (
                         <button onClick={() => handleKnowledgeAction(source.source_id, 'archived')}
                           style={{
                             padding: '2px 8px', borderRadius: '4px', fontSize: '11px',

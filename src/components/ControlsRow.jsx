@@ -77,7 +77,7 @@ export default function ControlsRow({
       {/* SWOT upload */}
       {['marketing', 'admin', 'regional'].includes(activeRoleId) && (
         <>
-          <input ref={swotInputRef} type="file" accept=".pdf,.docx,.doc,.txt" onChange={onSwotUpload} style={{ display: 'none' }} />
+          <input ref={swotInputRef} type="file" accept=".pdf,.docx,.xlsx,.pptx,.txt,.csv" onChange={onSwotUpload} style={{ display: 'none' }} />
           <button
             onClick={() => swotInputRef.current?.click()}
             disabled={isUploadingSwot}
@@ -93,11 +93,11 @@ export default function ControlsRow({
             {isUploadingSwot ? 'Uploading...' : swotResult
               ? (() => {
                   const r = swotResult.results || [];
-                  const updated = r.filter(x => x.status === 'updated').length;
+                  const updated = r.filter(x => x.status === 'updated_draft').length;
                   const existing = r.filter(x => x.status === 'already_exists').length;
                   if (existing === r.length) return 'SWOT unchanged';
-                  if (updated > 0) return `SWOT updated (${r.length} building${r.length !== 1 ? 's' : ''})`;
-                  return `SWOT saved (${r.length} building${r.length !== 1 ? 's' : ''})`;
+                  if (updated > 0) return `SWOT re-queued (${r.length} building${r.length !== 1 ? 's' : ''})`;
+                  return `SWOT queued (${r.length} building${r.length !== 1 ? 's' : ''})`;
                 })()
               : 'Upload SWOT'}
           </button>

@@ -1,44 +1,202 @@
 // ============================================================================
-// Knowledge Ingestion — POST /api/ingest-knowledge
+// Knowledge Ingestion - GET/POST/PATCH /api/ingest-knowledge
 // ============================================================================
-// Accepts documents (text, PDF, or URL) and stores them in knowledge_sources.
-//
-// Input (JSON):
-//   { title, source_type, content, state_code?, facility_id?, tags?, url? }
-//
-// source_type: corporate_playbook, state_reimbursement, payer_guidance,
-//              survey_template, operator_practice, faq, other
-//
-// If url is provided and content is empty, fetches the URL and extracts text.
+// Supports:
+//   - JSON text submission
+//   - multipart document upload (.pdf, .docx, .xlsx, .pptx, .txt, .csv)
+//   - governed review flow for every uploaded knowledge source
 
+import { createHash } from 'node:crypto';
+
+import {
+  extractTextFromDocument,
+  MAX_DOCUMENT_UPLOAD_BYTES,
+  parseMultipartForm,
+} from './lib/documentUpload.js';
+import {
+  ApprovedSourceOverwriteError,
+  canReviewKnowledge,
+  canSubmitKnowledge,
+  resolveKnowledgeScope,
+  syncKnowledgeReviewDecision,
+  upsertKnowledgeDraft,
+} from './lib/knowledgeGovernance.js';
+import { storeKnowledgeAsset } from './lib/knowledgeAssets.js';
 import { requireAuth } from './lib/requireAuth.js';
 
 const MAX_CONTENT_LENGTH = 100000;
+const VALID_SOURCE_TYPES = [
+  'corporate_playbook',
+  'state_reimbursement',
+  'payer_guidance',
+  'survey_template',
+  'referral_intelligence',
+  'operator_practice',
+  'faq',
+  'workflow_template',
+  'other',
+];
 
-export default async function handler(req, res) {
+function setCorsHeaders(req, res) {
   const origin = req.headers.origin || '';
   if (origin.endsWith('.vercel.app') || origin.startsWith('http://localhost')) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, PATCH, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
+}
+
+async function readRawBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function normalizeTags(input) {
+  if (Array.isArray(input)) {
+    return [...new Set(input.map((tag) => String(tag || '').trim()).filter(Boolean))];
+  }
+
+  if (typeof input === 'string') {
+    return [...new Set(
+      input
+        .split(',')
+        .map((tag) => tag.trim())
+        .filter(Boolean)
+    )];
+  }
+
+  return [];
+}
+
+async function parseKnowledgePost(req) {
+  const contentType = req.headers['content-type'] || '';
+  let payload = {
+    title: '',
+    source_type: '',
+    content: '',
+    state_code: '',
+    facility_id: '',
+    building_id: '',
+    tags: [],
+    url: '',
+    region: '',
+  };
+  let fileUpload = null;
+
+  if (contentType.includes('multipart/form-data')) {
+    const rawBody = await readRawBody(req);
+    const { fields, fileBuffer, fileName, mimeType } = parseMultipartForm(rawBody, contentType);
+
+    payload = {
+      title: fields.title || '',
+      source_type: fields.source_type || '',
+      content: fields.content || '',
+      state_code: fields.state_code || '',
+      facility_id: fields.facility_id || '',
+      building_id: fields.building_id || '',
+      tags: normalizeTags(fields.tags),
+      url: fields.url || '',
+      region: fields.region || '',
+    };
+
+    if (fileBuffer) {
+      fileUpload = {
+        buffer: fileBuffer,
+        fileName: fileName || 'upload',
+        mimeType,
+      };
+    }
+  } else if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
+    payload = {
+      title: req.body.title || '',
+      source_type: req.body.source_type || '',
+      content: req.body.content || '',
+      state_code: req.body.state_code || '',
+      facility_id: req.body.facility_id || '',
+      building_id: req.body.building_id || '',
+      tags: normalizeTags(req.body.tags),
+      url: req.body.url || '',
+      region: req.body.region || '',
+    };
+  } else {
+    const rawBody = await readRawBody(req);
+    if (contentType.includes('application/json')) {
+      try {
+        const body = JSON.parse(rawBody.toString('utf8'));
+        payload = {
+          title: body.title || '',
+          source_type: body.source_type || '',
+          content: body.content || '',
+          state_code: body.state_code || '',
+          facility_id: body.facility_id || '',
+          building_id: body.building_id || '',
+          tags: normalizeTags(body.tags),
+          url: body.url || '',
+          region: body.region || '',
+        };
+      } catch {
+        payload = { ...payload };
+      }
+    }
+  }
+
+  return { contentType, payload, fileUpload };
+}
+
+async function maybeFetchUrlContent(url) {
+  if (!url) return '';
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    throw new Error('Invalid URL');
+  }
+
+  if (parsedUrl.protocol !== 'https:') {
+    throw new Error('Only https URLs are allowed');
+  }
+
+  const response = await fetch(parsedUrl, {
+    headers: { 'User-Agent': 'IHCM-Bot-Knowledge-Ingestion/1.0' },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch URL: HTTP ${response.status}`);
+  }
+
+  const html = await response.text();
+  return html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export default async function handler(req, res) {
+  setCorsHeaders(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // Auth check
   const auth = await requireAuth(req);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
-  const { user: authUser, supabase, supabaseUser } = auth;
+  const { user: authUser, profile, supabase, supabaseUser } = auth;
 
-  // ── GET: list knowledge sources ──
   if (req.method === 'GET') {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const sourceType = url.searchParams.get('type');
     const stateCode = url.searchParams.get('state');
-    const statusFilter = url.searchParams.get('status'); // 'draft', 'approved', 'all'
+    const statusFilter = url.searchParams.get('status');
 
     let query = supabaseUser
       .from('knowledge_sources')
-      .select('source_id, title, source_type, state_code, facility_id, tags, status, effective_date, updated_at, citation_text, current_version, approver_user_id')
+      .select('source_id, title, source_type, state_code, facility_id, tags, status, effective_date, review_due_date, approved_at, updated_at, citation_text, current_version, approver_user_id, owner_user_id')
       .order('updated_at', { ascending: false })
       .limit(50);
 
@@ -51,240 +209,197 @@ export default async function handler(req, res) {
     return res.status(200).json({ sources: data || [] });
   }
 
-  // ── PATCH: approve/reject/archive a knowledge source ──
   if (req.method === 'PATCH') {
-    // Only admins can approve/archive
-    const adminRoles = ['super_admin', 'corporate_admin', 'knowledge_manager'];
-    if (!adminRoles.includes(auth.profile.app_role)) {
-      return res.status(403).json({ error: 'Only administrators can approve or archive knowledge sources' });
+    if (!canReviewKnowledge(profile)) {
+      return res.status(403).json({ error: 'Only knowledge reviewers can approve or archive knowledge sources' });
     }
 
-    const { source_id, status: newStatus } = req.body || {};
-    if (!source_id) return res.status(400).json({ error: 'source_id is required' });
+    const { source_id: sourceId, status: newStatus } = req.body || {};
+    if (!sourceId) return res.status(400).json({ error: 'source_id is required' });
     if (!['approved', 'archived', 'in_review', 'draft'].includes(newStatus)) {
       return res.status(400).json({ error: 'Invalid status. Use: approved, archived, in_review, draft' });
     }
 
-    // Get current source for version tracking
-    const { data: current } = await supabase
+    const { data: current, error: currentError } = await supabase
       .from('knowledge_sources')
-      .select('title, full_content, current_version')
-      .eq('source_id', source_id)
+      .select('source_id, title, full_content, current_version, status')
+      .eq('source_id', sourceId)
       .single();
 
-    if (!current) return res.status(404).json({ error: 'Knowledge source not found' });
+    if (currentError || !current) {
+      return res.status(404).json({ error: 'Knowledge source not found' });
+    }
 
-    const nextVersion = (current.current_version || 0) + 1;
-    let versionInserted = false;
-
-    if (current && newStatus === 'approved') {
-      const { error: versionError } = await supabase.from('knowledge_versions').insert({
-        source_id,
-        version_number: nextVersion,
-        content_snapshot: current.full_content?.slice(0, 50000) || '',
-        changed_by: authUser.id,
-        change_summary: `Status changed to ${newStatus} by ${authUser.email}`,
-      });
+    let nextVersion = current.current_version || 1;
+    if (newStatus === 'approved' && current.status !== 'approved') {
+      nextVersion += 1;
+      const { error: versionError } = await supabase
+        .from('knowledge_versions')
+        .insert({
+          source_id: sourceId,
+          version_number: nextVersion,
+          content_snapshot: current.full_content?.slice(0, 50000) || '',
+          changed_by: authUser.id,
+          change_summary: `Status changed to ${newStatus} by ${authUser.email}`,
+        });
 
       if (versionError) {
-        console.error('[ingest-knowledge] Version insert failed:', versionError.message);
-        return res.status(500).json({ error: 'Failed to create knowledge version audit trail' });
+        return res.status(500).json({ error: `Failed to create knowledge version audit trail: ${versionError.message}` });
       }
-      versionInserted = true;
     }
 
     const updatePayload = {
       status: newStatus,
-      ...(newStatus === 'approved'
-        ? { current_version: nextVersion, approver_user_id: authUser.id }
-        : {}),
+      approver_user_id: newStatus === 'approved' ? authUser.id : null,
+      approved_at: newStatus === 'approved' ? new Date().toISOString() : null,
     };
+
+    if (newStatus === 'approved' && current.status !== 'approved') {
+      updatePayload.current_version = nextVersion;
+    }
 
     const { data, error } = await supabase
       .from('knowledge_sources')
       .update(updatePayload)
-      .eq('source_id', source_id)
-      .select('source_id, title, status')
+      .eq('source_id', sourceId)
+      .select('source_id, title, status, current_version, approver_user_id, approved_at')
       .single();
 
     if (error) {
-      if (versionInserted) {
-        await supabase
-          .from('knowledge_versions')
-          .delete()
-          .eq('source_id', source_id)
-          .eq('version_number', nextVersion)
-          .eq('changed_by', authUser.id)
-          .catch((cleanupErr) => {
-            console.error('[ingest-knowledge] Version rollback failed:', cleanupErr.message);
-          });
-      }
       return res.status(500).json({ error: error.message });
     }
 
-    if (newStatus !== 'approved' && current.current_version !== null) {
-      await supabase
-        .from('knowledge_sources')
-        .update({ approver_user_id: null })
-        .eq('source_id', source_id)
-        .catch(() => {});
+    try {
+      await syncKnowledgeReviewDecision({
+        supabase,
+        sourceId,
+        reviewerId: authUser.id,
+        sourceStatus: newStatus,
+        note: `Knowledge source marked ${newStatus} by ${authUser.email}`,
+      });
+    } catch (queueError) {
+      console.warn('[ingest-knowledge] Review queue sync failed:', queueError.message);
     }
-
-    console.log(JSON.stringify({
-      event: 'knowledge_status_changed',
-      source_id, new_status: newStatus,
-      user: authUser.email,
-      timestamp: new Date().toISOString(),
-    }));
 
     return res.status(200).json({ success: true, source: data });
   }
 
-  // ── POST: ingest new knowledge source ──
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
-  const { title, source_type, content, state_code, facility_id, tags, url, region, building_id } = req.body || {};
-
-  if (!title || !source_type) {
-    return res.status(400).json({ error: 'title and source_type are required' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const validTypes = ['corporate_playbook', 'state_reimbursement', 'payer_guidance',
-    'survey_template', 'referral_intelligence', 'operator_practice', 'faq', 'workflow_template', 'other'];
-  if (!validTypes.includes(source_type)) {
-    return res.status(400).json({ error: `Invalid source_type. Valid: ${validTypes.join(', ')}` });
+  if (!canSubmitKnowledge(profile)) {
+    return res.status(403).json({ error: 'Your account does not have permission to submit knowledge uploads' });
   }
-
-  let fullContent = content || '';
-
-  let resolvedFacilityId = facility_id || null;
-  let resolvedStateCode = state_code || null;
-
-  if (building_id) {
-    const { data: facility, error: facilityError } = await supabase
-      .from('facilities')
-      .select('facility_id, state_code')
-      .eq('facility_code', building_id)
-      .single();
-
-    if (facilityError || !facility) {
-      return res.status(400).json({ error: 'Unknown building_id' });
-    }
-
-    resolvedFacilityId = facility.facility_id;
-    if (resolvedStateCode && resolvedStateCode !== facility.state_code) {
-      return res.status(400).json({ error: 'state_code does not match the selected building' });
-    }
-    resolvedStateCode = facility.state_code;
-  }
-
-  // If URL provided but no content, fetch it
-  if (url && !fullContent) {
-    let parsedUrl;
-    try {
-      parsedUrl = new URL(url);
-    } catch {
-      return res.status(400).json({ error: 'Invalid URL' });
-    }
-    if (parsedUrl.protocol !== 'https:') {
-      return res.status(400).json({ error: 'Only https URLs are allowed' });
-    }
-
-    try {
-      const response = await fetch(parsedUrl, {
-        headers: { 'User-Agent': 'IHCM-Bot-Knowledge-Ingestion/1.0' },
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const html = await response.text();
-      // Basic HTML to text extraction
-      fullContent = html
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/\s+/g, ' ')
-        .trim();
-      fullContent = fullContent.slice(0, MAX_CONTENT_LENGTH);
-    } catch (err) {
-      return res.status(400).json({ error: `Failed to fetch URL: ${err.message}` });
-    }
-  }
-
-  if (!fullContent || fullContent.length < 10) {
-    return res.status(400).json({ error: 'No content provided or fetched' });
-  }
-  fullContent = fullContent.slice(0, MAX_CONTENT_LENGTH);
-
-  // Generate citation_text and content hash for dedupe
-  const citationText = fullContent.slice(0, 500).replace(/\s+/g, ' ').trim();
-  const { createHash } = await import('node:crypto');
-  const contentHash = createHash('md5').update(fullContent).digest('hex');
-
-  // Dedupe check: same title + type + state + facility
-  try {
-    let dedupeQuery = supabase
-      .from('knowledge_sources')
-      .select('source_id, title, status')
-      .eq('title', title)
-      .eq('source_type', source_type)
-      .neq('status', 'archived');
-    if (resolvedStateCode) dedupeQuery = dedupeQuery.eq('state_code', resolvedStateCode);
-    else dedupeQuery = dedupeQuery.is('state_code', null);
-    if (resolvedFacilityId) dedupeQuery = dedupeQuery.eq('facility_id', resolvedFacilityId);
-    else dedupeQuery = dedupeQuery.is('facility_id', null);
-    const { data: existing } = await dedupeQuery.limit(1);
-
-    if (existing?.length > 0) {
-      return res.status(409).json({
-        error: 'A knowledge source with this title and type already exists',
-        existing: existing[0],
-      });
-    }
-  } catch { /* proceed if dedupe check fails */ }
 
   try {
-    const { data, error } = await supabase
-      .from('knowledge_sources')
-      .insert({
-        title,
-        source_type,
-        state_code: resolvedStateCode,
-        facility_id: resolvedFacilityId,
-        region: region || null,
-        tags: tags || [],
-        status: 'draft',
-        effective_date: new Date().toISOString().split('T')[0],
-        citation_text: citationText,
-        full_content: fullContent,
-        content_hash: contentHash,
-      })
-      .select('source_id, title, source_type, status')
-      .single();
+    const { payload, fileUpload } = await parseKnowledgePost(req);
+    const title = String(payload.title || '').trim();
+    const sourceType = String(payload.source_type || '').trim();
+    const stateCode = String(payload.state_code || '').trim().toUpperCase() || null;
+    const region = String(payload.region || '').trim() || null;
 
-    if (error) {
-      console.error('[ingest-knowledge] Insert failed:', error.message);
-      return res.status(500).json({ error: 'Failed to store knowledge source' });
+    if (!title || !sourceType) {
+      return res.status(400).json({ error: 'title and source_type are required' });
+    }
+    if (!VALID_SOURCE_TYPES.includes(sourceType)) {
+      return res.status(400).json({ error: `Invalid source_type. Valid: ${VALID_SOURCE_TYPES.join(', ')}` });
     }
 
-    console.log(JSON.stringify({
-      event: 'knowledge_ingested',
-      source_id: data.source_id,
+    const scope = await resolveKnowledgeScope({
+      supabaseUser,
+      buildingId: payload.building_id || null,
+      facilityId: payload.facility_id || null,
+      stateCode,
+    });
+
+    let fullContent = String(payload.content || '').trim();
+    let parserUsed = null;
+    let normalizedMimeType = null;
+    let assetWarning = null;
+
+    if (fileUpload) {
+      if (fileUpload.buffer.length > MAX_DOCUMENT_UPLOAD_BYTES) {
+        return res.status(413).json({ error: `File too large (max ${MAX_DOCUMENT_UPLOAD_BYTES / 1024 / 1024}MB)` });
+      }
+
+      const extracted = await extractTextFromDocument({
+        buffer: fileUpload.buffer,
+        fileName: fileUpload.fileName,
+        mimeType: fileUpload.mimeType,
+      });
+      fullContent = extracted.text || '';
+      parserUsed = extracted.parser;
+      normalizedMimeType = extracted.normalizedMimeType;
+    } else if (payload.url && !fullContent) {
+      fullContent = await maybeFetchUrlContent(payload.url);
+    }
+
+    if (!fullContent || fullContent.length < 10) {
+      return res.status(400).json({ error: 'No document content could be extracted. Try a text-based PDF/Office file or paste the content directly.' });
+    }
+
+    fullContent = fullContent.slice(0, MAX_CONTENT_LENGTH);
+    const citationText = fullContent.slice(0, 500).replace(/\s+/g, ' ').trim();
+    const contentHash = createHash('md5').update(fullContent).digest('hex');
+
+    const noteBase = fileUpload
+      ? `Uploaded file "${fileUpload.fileName}" submitted by ${authUser.email}`
+      : `Knowledge source submitted by ${authUser.email}`;
+
+    const result = await upsertKnowledgeDraft({
+      supabase,
+      authUser,
       title,
-      source_type,
-      facility_id: resolvedFacilityId,
-      state_code: resolvedStateCode,
-      status: 'draft',
-      content_length: fullContent.length,
-      timestamp: new Date().toISOString(),
-    }));
+      sourceType,
+      facilityId: scope.facilityId,
+      stateCode: scope.stateCode,
+      region,
+      tags: payload.tags,
+      fullContent,
+      citationText,
+      contentHash,
+      reviewNote: noteBase,
+      isReviewer: canReviewKnowledge(profile),
+    });
 
-    return res.status(200).json({ success: true, source: data });
+    let asset = null;
+    if (fileUpload) {
+      try {
+        asset = await storeKnowledgeAsset({
+          supabase,
+          authUser,
+          sourceId: result.source.source_id,
+          fileBuffer: fileUpload.buffer,
+          fileName: fileUpload.fileName,
+          mimeType: normalizedMimeType || fileUpload.mimeType,
+          extractedText: fullContent,
+          parserUsed,
+        });
+      } catch (assetError) {
+        assetWarning = assetError.message;
+        console.warn('[ingest-knowledge] Asset storage warning:', assetError.message);
+      }
+    }
 
+    return res.status(200).json({
+      success: true,
+      source: result.source,
+      change_type: result.changeType,
+      review_status: 'pending',
+      review_queued: result.reviewQueued,
+      asset,
+      warning: assetWarning,
+    });
   } catch (err) {
+    if (err instanceof ApprovedSourceOverwriteError) {
+      return res.status(409).json({
+        error: err.message,
+        code: err.code,
+        approved_source_id: err.sourceId,
+      });
+    }
     console.error('[ingest-knowledge] Error:', err.message);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 }

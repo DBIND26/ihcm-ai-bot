@@ -135,7 +135,11 @@ const server = http.createServer(async (req, res) => {
         await ingestKnowledgeHandler(req, resAdapter);
         return;
       }
-      if (req.method === 'POST' || req.method === 'PATCH') {
+      if (req.method === 'POST') {
+        await ingestKnowledgeHandler(req, resAdapter);
+        return;
+      }
+      if (req.method === 'PATCH') {
         let body = '';
         for await (const chunk of req) { body += chunk; }
         try { req.body = JSON.parse(body); } catch { req.body = {}; }
