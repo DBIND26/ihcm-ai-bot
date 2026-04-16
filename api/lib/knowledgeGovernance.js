@@ -1,4 +1,14 @@
-const REVIEWER_APP_ROLES = new Set(['super_admin', 'corporate_admin', 'knowledge_manager']);
+const REVIEWER_APP_ROLES = new Set([
+  'super_admin',
+  'corporate_admin',
+  'knowledge_manager',
+  'regional_director',
+]);
+const PORTFOLIO_REVIEWER_APP_ROLES = new Set([
+  'super_admin',
+  'corporate_admin',
+  'knowledge_manager',
+]);
 const SUBMITTER_BOT_ROLES = new Set(['marketing', 'admin', 'regional']);
 
 function startOfToday() {
@@ -64,6 +74,30 @@ export function canSubmitKnowledge(profile = {}) {
 
 export function canReviewKnowledge(profile = {}) {
   return REVIEWER_APP_ROLES.has(profile?.app_role);
+}
+
+export function canReviewPortfolioKnowledge(profile = {}) {
+  return PORTFOLIO_REVIEWER_APP_ROLES.has(profile?.app_role);
+}
+
+// Regional reviewers must have facility access to approve building-scoped sources.
+// Portfolio reviewers can approve anything. Called with RLS-enforced client so
+// the user_facility_access check is scoped to the caller's real access.
+export async function canApproveKnowledgeSource({ supabaseUser, profile, source }) {
+  if (!canReviewKnowledge(profile)) return false;
+  if (canReviewPortfolioKnowledge(profile)) return true;
+
+  // regional_director beyond this point.
+  if (!source?.facility_id) return false; // portfolio-scoped: block regional
+
+  const { data, error } = await supabaseUser
+    .from('facilities')
+    .select('facility_id')
+    .eq('facility_id', source.facility_id)
+    .maybeSingle();
+
+  if (error) return false;
+  return !!data;
 }
 
 export async function resolveKnowledgeScope({

@@ -15,6 +15,7 @@ import {
 } from './lib/documentUpload.js';
 import {
   ApprovedSourceOverwriteError,
+  canApproveKnowledgeSource,
   canReviewKnowledge,
   canSubmitKnowledge,
   resolveKnowledgeScope,
@@ -222,12 +223,25 @@ export default async function handler(req, res) {
 
     const { data: current, error: currentError } = await supabase
       .from('knowledge_sources')
-      .select('source_id, title, full_content, current_version, status')
+      .select('source_id, title, full_content, current_version, status, facility_id')
       .eq('source_id', sourceId)
       .single();
 
     if (currentError || !current) {
       return res.status(404).json({ error: 'Knowledge source not found' });
+    }
+
+    const approvalAllowed = await canApproveKnowledgeSource({
+      supabaseUser,
+      profile,
+      source: current,
+    });
+    if (!approvalAllowed) {
+      return res.status(403).json({
+        error: current.facility_id
+          ? 'You can only review knowledge sources for facilities you have access to'
+          : 'Only portfolio-level reviewers can approve organization-wide knowledge sources',
+      });
     }
 
     let nextVersion = current.current_version || 1;

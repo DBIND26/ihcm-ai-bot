@@ -563,6 +563,7 @@ export default function App() {
 
   // Approve or archive a knowledge source
   const handleKnowledgeAction = async (sourceId, newStatus) => {
+    setUploadError(null);
     try {
       const res = await fetch('/api/ingest-knowledge', {
         method: 'PATCH',
@@ -570,10 +571,14 @@ export default function App() {
         body: JSON.stringify({ source_id: sourceId, status: newStatus }),
       });
       if (res.ok) {
-        fetchKnowledgeList(); // refresh
+        fetchKnowledgeList();
+        return;
       }
+      const data = await res.json().catch(() => ({}));
+      setUploadError(data.error || `Failed to ${newStatus === 'approved' ? 'approve' : 'archive'} knowledge source`);
     } catch (err) {
       console.warn('[IHCM] Knowledge action failed:', err);
+      setUploadError(err.message || 'Knowledge action failed');
     }
   };
 
@@ -859,7 +864,10 @@ export default function App() {
   const userName = userSession.userName;
   const allowedRoles = userSession.allowedRoles || getRoleIds();
   const allowedBuildings = userSession.allowedBuildings; // null = all
-  const canReviewKnowledge = ['super_admin', 'corporate_admin', 'knowledge_manager'].includes(userSession.appRole);
+  // regional_director can approve, but only for facilities they have access to
+  // (server enforces scope; UI shows buttons and surfaces the 403 if they try
+  // to approve a source outside their region). Building-level roles are excluded.
+  const canReviewKnowledge = ['super_admin', 'corporate_admin', 'knowledge_manager', 'regional_director'].includes(userSession.appRole);
 
   return (
     <div
