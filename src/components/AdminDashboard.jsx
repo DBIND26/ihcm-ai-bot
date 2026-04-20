@@ -1,18 +1,44 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
-export default function AdminDashboard({ authHeaders }) {
+export default function AdminDashboard({ authHeaders, canReviewKnowledge = false }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
+  const [actionError, setActionError] = useState(null);
+  const [pendingActionId, setPendingActionId] = useState(null);
 
-  useEffect(() => {
-    fetch('/api/admin', { headers: authHeaders() })
+  const fetchAdmin = useCallback(() => {
+    return fetch('/api/admin', { headers: authHeaders() })
       .then(r => { if (!r.ok) throw new Error('Failed to load'); return r.json(); })
       .then(setData)
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
-  }, []);
+      .catch(e => setError(e.message));
+  }, [authHeaders]);
+
+  useEffect(() => {
+    fetchAdmin().finally(() => setLoading(false));
+  }, [fetchAdmin]);
+
+  const handleKnowledgeAction = async (sourceId, newStatus) => {
+    setActionError(null);
+    setPendingActionId(sourceId);
+    try {
+      const res = await fetch('/api/ingest-knowledge', {
+        method: 'PATCH',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_id: sourceId, status: newStatus }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Failed to ${newStatus === 'approved' ? 'approve' : 'archive'} (HTTP ${res.status})`);
+      }
+      await fetchAdmin();
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setPendingActionId(null);
+    }
+  };
 
   if (loading) return <div style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>Loading admin data...</div>;
   if (error) return <div style={{ padding: '40px', textAlign: 'center', color: '#dc2626' }}>Error: {error}</div>;
@@ -49,7 +75,16 @@ export default function AdminDashboard({ authHeaders }) {
       {activeTab === 'users' && <UsersTab users={data.users} />}
       {activeTab === 'conversations' && <ConversationsTab conversations={data.conversations} totals={data.conversation_totals} />}
       {activeTab === 'feedback' && <FeedbackTab feedback={data.feedback} summary={data.feedback_summary} />}
-      {activeTab === 'knowledge' && <KnowledgeTab knowledge={data.knowledge} summary={data.knowledge_summary} />}
+      {activeTab === 'knowledge' && (
+        <KnowledgeTab
+          knowledge={data.knowledge}
+          summary={data.knowledge_summary}
+          canReviewKnowledge={canReviewKnowledge}
+          onAction={handleKnowledgeAction}
+          pendingActionId={pendingActionId}
+          actionError={actionError}
+        />
+      )}
       {activeTab === 'surveys' && <SurveysTab surveys={data.recent_surveys} authHeaders={authHeaders} />}
     </div>
   );
@@ -245,7 +280,58 @@ function FeedbackTab({ feedback, summary }) {
   );
 }
 
-function KnowledgeTab({ knowledge, summary }) {
+function KnowledgeTab({ knowledge, summary, canReviewKnowledge, onAction, pendingActionId, actionError }) {
+  const columns = [
+    { key: 'title', label: 'Title', render: v => (v || '').slice(0, 50) },
+    { key: 'source_type', label: 'Type', render: v => <Badge text={v?.replace(/_/g, ' ')} color="gray" /> },
+    { key: 'status', label: 'Status', render: v => <Badge text={v} color={v === 'approved' ? 'green' : v === 'draft' ? 'yellow' : 'gray'} /> },
+    { key: 'state_code', label: 'State' },
+    { key: 'facility_name', label: 'Building' },
+    { key: 'current_version', label: 'Ver' },
+    { key: 'updated_at', label: 'Updated', render: v => timeAgo(v) },
+  ];
+
+  if (canReviewKnowledge) {
+    columns.push({
+      key: 'actions',
+      label: 'Actions',
+      render: (_, row) => {
+        const isPending = pendingActionId === row.source_id;
+        const canApprove = row.status === 'draft' || row.status === 'in_review';
+        const canArchive = row.status !== 'archived';
+        if (!canApprove && !canArchive) return <span style={{ color: '#9ca3af' }}>—</span>;
+        return (
+          <div style={{ display: 'flex', gap: '6px' }}>
+            {canApprove && (
+              <button
+                onClick={() => onAction(row.source_id, 'approved')}
+                disabled={isPending}
+                style={{
+                  padding: '4px 10px', borderRadius: '4px', fontSize: '12px',
+                  border: '1px solid #16a34a', backgroundColor: isPending ? '#f3f4f6' : '#f0fdf4',
+                  color: '#166534', cursor: isPending ? 'not-allowed' : 'pointer', fontWeight: '600',
+                }}>
+                {isPending ? '…' : 'Approve'}
+              </button>
+            )}
+            {canArchive && (
+              <button
+                onClick={() => onAction(row.source_id, 'archived')}
+                disabled={isPending}
+                style={{
+                  padding: '4px 10px', borderRadius: '4px', fontSize: '12px',
+                  border: '1px solid #d1d5db', backgroundColor: 'white',
+                  color: '#6b7280', cursor: isPending ? 'not-allowed' : 'pointer', fontWeight: '500',
+                }}>
+                Archive
+              </button>
+            )}
+          </div>
+        );
+      },
+    });
+  }
+
   return (
     <>
       <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
@@ -253,18 +339,15 @@ function KnowledgeTab({ knowledge, summary }) {
         <StatCard label="Drafts" value={summary?.draft || 0} color="#d97706" />
         <StatCard label="Archived" value={summary?.archived || 0} />
       </div>
-      <Table
-        columns={[
-          { key: 'title', label: 'Title', render: v => (v || '').slice(0, 50) },
-          { key: 'source_type', label: 'Type', render: v => <Badge text={v?.replace(/_/g, ' ')} color="gray" /> },
-          { key: 'status', label: 'Status', render: v => <Badge text={v} color={v === 'approved' ? 'green' : v === 'draft' ? 'yellow' : 'gray'} /> },
-          { key: 'state_code', label: 'State' },
-          { key: 'facility_name', label: 'Building' },
-          { key: 'current_version', label: 'Ver' },
-          { key: 'updated_at', label: 'Updated', render: v => timeAgo(v) },
-        ]}
-        rows={knowledge || []}
-      />
+      {actionError && (
+        <div style={{
+          padding: '8px 12px', marginBottom: '12px', borderRadius: '6px',
+          backgroundColor: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', fontSize: '13px',
+        }}>
+          {actionError}
+        </div>
+      )}
+      <Table columns={columns} rows={knowledge || []} />
     </>
   );
 }
