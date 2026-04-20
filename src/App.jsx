@@ -963,7 +963,7 @@ export default function App() {
       {/* Admin View */}
       {viewMode === 'admin' && (
         <div style={{ flex: 1, overflowY: 'auto' }}>
-          <AdminDashboard authHeaders={authHeaders} />
+          <AdminDashboard authHeaders={authHeaders} canReviewKnowledge={canReviewKnowledge} />
         </div>
       )}
 
