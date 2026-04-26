@@ -4,7 +4,7 @@
   "framework": "vite",
   "functions": {
     "api/chat.js": {
-      "maxDuration": 30
+      "maxDuration": 60
     },
     "api/parse-2567.js": {
       "maxDuration": 60
